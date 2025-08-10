@@ -1,53 +1,35 @@
 #!/usr/bin/env python3
 """
-Flask + Vite Deployment Script
-One-command deployment for VelaOS bootloader system
+Flask + Vite Repository Deployment Script
+Direct execution for VelaOS bootloader system (no downloads needed)
 
-This script can be served from GitHub and executed directly:
-    curl -sSL https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/deploy.py | python3
-
-Or downloaded and run locally:
-    python3 deploy.py
+This script assumes all files are already cloned locally by VelaOS:
+- flask_vite_bootloader.py (in same directory)
+- bootloader_config.json (in same directory)
 """
 
 import os
 import sys
 import subprocess
-import urllib.request
 from pathlib import Path
 
 
-def download_bootloader():
-    """Download the main bootloader script."""
-    bootloader_url = "https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/flask_vite_bootloader.py"
-    config_url = "https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/bootloader_config.json"
+def check_local_files():
+    """Check that required files are present locally."""
+    print("Checking for local bootloader files...")
     
-    print("Downloading Flask + Vite bootloader...")
+    required_files = ['flask_vite_bootloader.py', 'bootloader_config.json']
+    missing_files = []
     
-    try:
-        # Download bootloader script
-        with urllib.request.urlopen(bootloader_url) as response:
-            bootloader_content = response.read().decode('utf-8')
-        
-        with open('flask_vite_bootloader.py', 'w') as f:
-            f.write(bootloader_content)
-        
-        # Make executable
-        os.chmod('flask_vite_bootloader.py', 0o755)
-        print("[OK] Downloaded flask_vite_bootloader.py")
-        
-        # Download config
-        with urllib.request.urlopen(config_url) as response:
-            config_content = response.read().decode('utf-8')
-        
-        with open('bootloader_config.json', 'w') as f:
-            f.write(config_content)
-        
-        print("[OK] Downloaded bootloader_config.json")
-        
-    except Exception as e:
-        print(f"[ERROR] Download failed: {e}")
-        print("Falling back to local execution...")
+    for filename in required_files:
+        if not Path(filename).exists():
+            missing_files.append(filename)
+        else:
+            print(f"[OK] Found {filename}")
+    
+    if missing_files:
+        print(f"[ERROR] Missing files: {', '.join(missing_files)}")
+        print("These files should be in the same directory as deploy.py")
         return False
     
     return True
@@ -91,7 +73,7 @@ def check_requirements():
 def main():
     """Main deployment entry point."""
     print("=" * 60)
-    print("FLASK + VITE BOOTLOADER DEPLOYMENT")
+    print("FLASK + VITE REPOSITORY DEPLOYMENT")
     print("=" * 60)
     
     # Check system requirements
@@ -102,19 +84,22 @@ def main():
         print("- Node.js and npm")
         sys.exit(1)
     
-    # Download bootloader if not running locally
-    if not Path('flask_vite_bootloader.py').exists():
-        if not download_bootloader():
-            print("Could not download bootloader files")
-            sys.exit(1)
+    # Check for local bootloader files (should be cloned by VelaOS)
+    if not check_local_files():
+        print("\nBootloader files not found in current directory.")
+        print("This script expects to run in a repository with:")
+        print("- flask_vite_bootloader.py")
+        print("- bootloader_config.json")
+        sys.exit(1)
     
-    # Execute the bootloader
+    # Execute the bootloader directly (no downloads needed)
     print("\nStarting Flask + Vite bootloader...")
     try:
         subprocess.run([sys.executable, 'flask_vite_bootloader.py', '--deploy'], 
                       check=True)
+        print("\n[SUCCESS] Flask + Vite deployment completed!")
     except subprocess.CalledProcessError as e:
-        print(f"Deployment failed: {e}")
+        print(f"\n[ERROR] Deployment failed: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nDeployment interrupted by user")
