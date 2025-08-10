@@ -4,7 +4,7 @@ Flask + Vite Repository Deployment Script
 Direct execution for VelaOS bootloader system (no downloads needed)
 
 This script assumes all files are already cloned locally by VelaOS:
-- flask_vite_bootloader.py (in same directory)
+- vite_flask_bootloader.py (in same directory)
 - bootloader_config.json (in same directory)
 """
 
@@ -18,7 +18,7 @@ def check_local_files():
     """Check that required files are present locally."""
     print("Checking for local bootloader files...")
     
-    required_files = ['flask_vite_bootloader.py', 'bootloader_config.json']
+    required_files = ['vite_flask_bootloader.py', 'bootloader_config.json']
     missing_files = []
     
     for filename in required_files:
