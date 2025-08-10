@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Simple VelaOS Deploy Script
-Runs Steps 1 and 2 in sequence without complex orchestration
+Simple VelaOS Deploy Orchestrator
+Runs Step 1 and Step 2 in sequence - flat and simple
 
 This script is designed to be called by VelaOS after GitHub repository clone.
-It runs the essential deployment steps to get a Flask + Vite project started.
+It runs the essential deployment steps without complex orchestration.
 
 Usage:
-    python deploy.py                    # Auto-deploy (VelaOS compatible)
+    python deploy.py                    # Auto-deploy Steps 1 and 2 (VelaOS compatible)
     python deploy.py --help-only        # Show help only
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 import argparse
 
 
-def check_system_requirements():
+def check_requirements():
     """Check basic system requirements."""
     print("Checking system requirements...")
     
@@ -41,7 +41,7 @@ def check_system_requirements():
     return True
 
 
-def check_required_files():
+def check_files():
     """Check that required bootloader files are present."""
     print("Checking for required files...")
     
@@ -83,7 +83,6 @@ def run_step(step_num, step_name, script_name):
         
         # Show output
         if result.stdout:
-            print("📄 Output:")
             for line in result.stdout.strip().split('\n'):
                 if line.strip():
                     print(f"   {line}")
@@ -127,12 +126,12 @@ def main():
     print("=" * 60)
     
     # Check system requirements
-    if not check_system_requirements():
+    if not check_requirements():
         print("\n❌ System requirements not met.")
         sys.exit(1)
     
     # Check required files
-    if not check_required_files():
+    if not check_files():
         print("\n❌ Required bootloader files not found.")
         print("This script expects to run in a repository with:")
         print("- folder_bootloader.py")
@@ -173,13 +172,13 @@ def main():
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Simple VelaOS Deploy Script")
+    parser = argparse.ArgumentParser(description="Simple VelaOS Deploy Orchestrator")
     parser.add_argument("--help-only", action="store_true", help="Show help only")
     
     args = parser.parse_args()
     
     if args.help_only:
-        print("Simple VelaOS Deploy Script")
+        print("Simple VelaOS Deploy Orchestrator")
         print("\nThis script runs essential deployment steps:")
         print("1. Folder Structure Creation")
         print("2. Python Environment Setup")
