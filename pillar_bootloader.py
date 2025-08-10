@@ -305,8 +305,9 @@ class PillarBootloader:
             subprocess.run(['uv', '--version'], capture_output=True, check=True)
             self.logger.info("uv is available")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self.logger.error("uv is not installed. Please install uv first.")
-            raise SystemExit("uv is required for Python environment setup")
+            self.logger.warning("uv is not installed. Skipping Python environment setup.")
+            self.logger.info("To enable Python environment setup, install uv: curl -LsSf https://astral.sh/uv/install.sh | sh")
+            return False
         
         # Create .venv if it doesn't exist
         venv_path = self.project_root / ".venv"
@@ -321,6 +322,7 @@ class PillarBootloader:
         self.logger.info("Installing Python dependencies...")
         subprocess.run(['uv', 'sync'], cwd=self.project_root, check=True)
         self.logger.info("Python dependencies installed")
+        return True
     
     def setup_frontend_environment(self):
         """Setup frontend environment using npm."""
@@ -331,8 +333,9 @@ class PillarBootloader:
             subprocess.run(['npm', '--version'], capture_output=True, check=True)
             self.logger.info("npm is available")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            self.logger.error("npm is not installed. Please install Node.js and npm first.")
-            raise SystemExit("npm is required for frontend setup")
+            self.logger.warning("npm is not installed. Skipping frontend environment setup.")
+            self.logger.info("To enable frontend setup, install Node.js and npm")
+            return False
         
         # Check if package.json exists
         package_json_path = self.project_root / "package.json"
@@ -344,6 +347,7 @@ class PillarBootloader:
         self.logger.info("Installing frontend dependencies...")
         subprocess.run(['npm', 'install'], cwd=self.project_root, check=True)
         self.logger.info("Frontend dependencies installed")
+        return True
     
     def _create_package_json(self):
         """Create a basic package.json for Vite."""
@@ -388,13 +392,24 @@ class PillarBootloader:
             # Merge into project TOML
             self.merge_project_toml()
             
-            # Setup Python environment
-            self.setup_python_environment()
+            # Setup Python environment (optional)
+            python_setup = self.setup_python_environment()
             
-            # Setup frontend environment
-            self.setup_frontend_environment()
+            # Setup frontend environment (optional)
+            frontend_setup = self.setup_frontend_environment()
             
-            self.logger.info("Pillar-based deployment completed successfully!")
+            # Report deployment status
+            if python_setup and frontend_setup:
+                self.logger.info("Pillar-based deployment completed successfully with full environment setup!")
+            elif python_setup or frontend_setup:
+                self.logger.info("Pillar-based deployment completed with partial environment setup!")
+                if not python_setup:
+                    self.logger.warning("Python environment setup skipped - install uv to enable")
+                if not frontend_setup:
+                    self.logger.warning("Frontend environment setup skipped - install Node.js/npm to enable")
+            else:
+                self.logger.info("Pillar-based deployment completed (TOML generation only)!")
+                self.logger.warning("Environment setup skipped - install uv and Node.js/npm for full deployment")
             
         except Exception as e:
             self.logger.error(f"Deployment failed: {e}")
