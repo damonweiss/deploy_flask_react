@@ -88,7 +88,7 @@ def main():
     if not check_local_files():
         print("\nBootloader files not found in current directory.")
         print("This script expects to run in a repository with:")
-        print("- flask_vite_bootloader.py")
+        print("- vite_flask_bootloader.py")
         print("- bootloader_config.json")
         sys.exit(1)
     
