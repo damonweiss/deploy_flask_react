@@ -4,7 +4,7 @@ Flask + Vite Repository Deployment Script
 Direct execution for VelaOS bootloader system (no downloads needed)
 
 This script assumes all files are already cloned locally by VelaOS:
-- vite_flask_bootloader.py (in same directory)
+- flask_vite_bootloader.py (in same directory)
 - bootloader_config.json (in same directory)
 """
 
@@ -95,7 +95,7 @@ def main():
     # Execute the bootloader directly (no downloads needed)
     print("\nStarting Flask + Vite bootloader...")
     try:
-        subprocess.run([sys.executable, 'flask_vite_bootloader.py', '--deploy'], 
+        subprocess.run([sys.executable, 'vite_flask_bootloader.py', '--deploy'], 
                       check=True)
         print("\n[SUCCESS] Flask + Vite deployment completed!")
     except subprocess.CalledProcessError as e:
@@ -103,7 +103,7 @@ def main():
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nDeployment interrupted by user")
-        subprocess.run([sys.executable, 'flask_vite_bootloader.py', '--stop'])
+        subprocess.run([sys.executable, 'vite_flask_bootloader.py', '--stop'])
         sys.exit(0)
 
 
