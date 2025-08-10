@@ -23,7 +23,16 @@ class FolderBootloader:
     def __init__(self, config_path: str = None):
         self.config_path = config_path or "bootloader_config.json"
         self.config = self._load_config()
-        self.project_root = Path.cwd()
+        
+        # Use VELA_CORE_DIR if available (VelaOS deployment), otherwise current directory
+        vela_target = os.environ.get("VELA_CORE_DIR")
+        if vela_target:
+            self.project_root = Path(vela_target)
+            print(f"[VelaOS] Using target directory: {self.project_root}")
+        else:
+            self.project_root = Path.cwd()
+            print(f"[Local] Using current directory: {self.project_root}")
+            
         self.app_name = self.config["application"]["name"]
         
         # Setup logging
