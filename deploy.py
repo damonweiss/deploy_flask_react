@@ -7,7 +7,9 @@ This script is designed to be called by VelaOS after GitHub repository clone.
 It focuses solely on creating the project folder structure without any dependencies.
 
 Usage:
-    python deploy_step_1.py --deploy
+    python deploy_step_1.py                 # Auto-deploy (VelaOS compatible)
+    python deploy_step_1.py --deploy        # Explicit deploy
+    python deploy_step_1.py --help-only     # Show help only
 """
 
 import os
@@ -110,18 +112,21 @@ def main():
 
 
 if __name__ == '__main__':
-    # Parse arguments
+    # Parse arguments - but default to deploy=True for VelaOS compatibility
     parser = argparse.ArgumentParser(description="Deploy Step 1: Folder Structure Creation")
     parser.add_argument("--deploy", action="store_true", help="Execute folder structure creation")
+    parser.add_argument("--help-only", action="store_true", help="Show help only (don't auto-deploy)")
     
     args = parser.parse_args()
     
-    if args.deploy:
-        main()
-    else:
+    # Auto-deploy unless explicitly asked for help only
+    if args.help_only:
         print("Deploy Step 1 - Use --deploy to create folder structure")
         print("\nThis is the first step in the ordered deployment process:")
         print("1. [THIS STEP] Create folder structure")
         print("2. Setup Python environment (uv, .venv)")
         print("3. Generate backend TOML")
         print("4. Setup frontend (npm)")
+    else:
+        # Default behavior: auto-deploy (VelaOS compatibility)
+        main()
