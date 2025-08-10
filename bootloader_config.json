@@ -1,0 +1,63 @@
+{
+  "application": {
+    "name": "Flask-Vite-App",
+    "version": "1.0.0",
+    "environment": "production",
+    "description": "Flask + Vite application deployed via VelaOS bootloader"
+  },
+  "backend": {
+    "framework": "flask",
+    "port": 8050,
+    "host": "0.0.0.0",
+    "workers": 4,
+    "timeout": 30,
+    "dependencies": [
+      "flask>=3.0.0",
+      "flask-cors>=4.0.0",
+      "gunicorn>=21.0.0",
+      "python-dotenv>=1.0.0"
+    ]
+  },
+  "frontend": {
+    "framework": "vite",
+    "port": 5173,
+    "host": "0.0.0.0",
+    "build_command": "npm run build",
+    "serve_command": "npm run preview",
+    "dependencies": [
+      "react@^18.2.0",
+      "react-dom@^18.2.0",
+      "@vitejs/plugin-react@^4.0.0",
+      "vite@^5.0.0",
+      "@mantine/core@^7.0.0",
+      "@mantine/hooks@^7.0.0"
+    ]
+  },
+  "deployment": {
+    "auto_install": true,
+    "auto_start": true,
+    "health_check_enabled": true,
+    "health_check_interval": 30,
+    "restart_on_failure": true,
+    "max_restarts": 3
+  },
+  "paths": {
+    "backend_dir": "./backend",
+    "frontend_dir": "./frontend",
+    "logs_dir": "./logs",
+    "pid_dir": "./pids"
+  },
+  "proxy": {
+    "enabled": true,
+    "backend_url": "http://localhost:8050",
+    "api_prefix": "/api"
+  },
+  "security": {
+    "cors_origins": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173"
+    ],
+    "allowed_hosts": ["*"],
+    "secure_headers": true
+  }
+}
