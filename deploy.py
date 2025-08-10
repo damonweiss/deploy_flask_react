@@ -4,7 +4,7 @@ Flask + Vite Repository Deployment Script
 Direct execution for VelaOS bootloader system (no downloads needed)
 
 This script assumes all files are already cloned locally by VelaOS:
-- flask_vite_bootloader.py (in same directory)
+- vite_flask_bootloader.py (in same directory)
 - bootloader_config.json (in same directory)
 """
 
