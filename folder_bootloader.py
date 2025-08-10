@@ -32,7 +32,7 @@ class FolderBootloader:
             # We want the deployment root: C:\...\vela_install_20250810_193432
             core_path = Path(vela_target)
             # Go up: cores -> .vela -> data -> deployment_root
-            deployment_root = core_path.parent.parent.parent
+            deployment_root = core_path.parent.parent.parent.parent
             self.project_root = deployment_root
             print(f"[VelaOS] Core directory: {core_path}")
             print(f"[VelaOS] Using deployment root: {self.project_root}")
