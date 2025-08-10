@@ -4,7 +4,7 @@ Flask + Vite Repository Deployment Script
 Direct execution for VelaOS bootloader system (no downloads needed)
 
 This script assumes all files are already cloned locally by VelaOS:
-- vite_flask_bootloader.py (in same directory)
+- flask_vite_bootloader.py (in same directory)
 - bootloader_config.json (in same directory)
 """
 
@@ -18,7 +18,7 @@ def check_local_files():
     """Check that required files are present locally."""
     print("Checking for local bootloader files...")
     
-    required_files = ['vite_flask_bootloader.py', 'bootloader_config.json']
+    required_files = ['pillar_bootloader.py', 'bootloader_config.json']
     missing_files = []
     
     for filename in required_files:
@@ -88,14 +88,14 @@ def main():
     if not check_local_files():
         print("\nBootloader files not found in current directory.")
         print("This script expects to run in a repository with:")
-        print("- vite_flask_bootloader.py")
+        print("- flask_vite_bootloader.py")
         print("- bootloader_config.json")
         sys.exit(1)
     
     # Execute the bootloader directly (no downloads needed)
     print("\nStarting Flask + Vite bootloader...")
     try:
-        subprocess.run([sys.executable, 'vite_flask_bootloader.py', '--deploy'], 
+        subprocess.run([sys.executable, 'pillar_bootloader.py', '--deploy'], 
                       check=True)
         print("\n[SUCCESS] Flask + Vite deployment completed!")
     except subprocess.CalledProcessError as e:
@@ -103,7 +103,7 @@ def main():
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nDeployment interrupted by user")
-        subprocess.run([sys.executable, 'vite_flask_bootloader.py', '--stop'])
+        subprocess.run([sys.executable, 'pillar_bootloader.py', '--stop'])
         sys.exit(0)
 
 
