@@ -4,7 +4,7 @@ Flask + Vite Deployment Script
 One-command deployment for VelaOS bootloader system
 
 This script can be served from GitHub and executed directly:
-    curl -sSL https://raw.githubusercontent.com/user/repo/main/deploy.py | python3
+    curl -sSL https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/deploy.py | python3
 
 Or downloaded and run locally:
     python3 deploy.py
@@ -19,8 +19,8 @@ from pathlib import Path
 
 def download_bootloader():
     """Download the main bootloader script."""
-    bootloader_url = "https://raw.githubusercontent.com/user/repo/main/flask_vite_bootloader.py"
-    config_url = "https://raw.githubusercontent.com/user/repo/main/bootloader_config.json"
+    bootloader_url = "https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/flask_vite_bootloader.py"
+    config_url = "https://raw.githubusercontent.com/damonweiss/deploy_flask_react/main/bootloader_config.json"
     
     print("Downloading Flask + Vite bootloader...")
     
@@ -34,7 +34,7 @@ def download_bootloader():
         
         # Make executable
         os.chmod('flask_vite_bootloader.py', 0o755)
-        print("✓ Downloaded flask_vite_bootloader.py")
+        print("[OK] Downloaded flask_vite_bootloader.py")
         
         # Download config
         with urllib.request.urlopen(config_url) as response:
@@ -43,10 +43,10 @@ def download_bootloader():
         with open('bootloader_config.json', 'w') as f:
             f.write(config_content)
         
-        print("✓ Downloaded bootloader_config.json")
+        print("[OK] Downloaded bootloader_config.json")
         
     except Exception as e:
-        print(f"✗ Download failed: {e}")
+        print(f"[ERROR] Download failed: {e}")
         print("Falling back to local execution...")
         return False
     
@@ -59,30 +59,30 @@ def check_requirements():
     
     # Check Python version
     if sys.version_info < (3, 8):
-        print("✗ Python 3.8+ required")
+        print("[ERROR] Python 3.8+ required")
         return False
-    print("✓ Python version OK")
+    print("[OK] Python version OK")
     
     # Check for uv (preferred) or pip
     try:
         subprocess.run(['uv', '--version'], capture_output=True, check=True)
-        print("✓ uv package manager available")
+        print("[OK] uv package manager available")
     except (subprocess.CalledProcessError, FileNotFoundError):
         try:
             subprocess.run([sys.executable, '-m', 'pip', '--version'], 
                          capture_output=True, check=True)
-            print("✓ pip package manager available")
+            print("[OK] pip package manager available")
         except subprocess.CalledProcessError:
-            print("✗ No Python package manager found")
+            print("[ERROR] No Python package manager found")
             return False
     
     # Check for Node.js and npm
     try:
         subprocess.run(['node', '--version'], capture_output=True, check=True)
         subprocess.run(['npm', '--version'], capture_output=True, check=True)
-        print("✓ Node.js and npm available")
+        print("[OK] Node.js and npm available")
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("✗ Node.js and npm required")
+        print("[ERROR] Node.js and npm required")
         return False
     
     return True
