@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """
-Flask + Vite Repository Deployment Script
-Direct execution for VelaOS bootloader system (no downloads needed)
+Deploy Step 1: Folder Structure Creation
+First step in the ordered deployment process - just creates folders
 
-This script assumes all files are already cloned locally by VelaOS:
-- flask_vite_bootloader.py (in same directory)
-- bootloader_config.json (in same directory)
+This script is designed to be called by VelaOS after GitHub repository clone.
+It focuses solely on creating the project folder structure without any dependencies.
+
+Usage:
+    python deploy_step_1.py --deploy
 """
 
 import os
 import sys
 import subprocess
 from pathlib import Path
+import argparse
+import logging
 
 
 def check_local_files():
     """Check that required files are present locally."""
     print("Checking for local bootloader files...")
     
-    required_files = ['pillar_bootloader.py', 'bootloader_config.json']
+    required_files = ['folder_bootloader.py', 'bootloader_config.json']
     missing_files = []
     
     for filename in required_files:
@@ -29,14 +33,14 @@ def check_local_files():
     
     if missing_files:
         print(f"[ERROR] Missing files: {', '.join(missing_files)}")
-        print("These files should be in the same directory as deploy.py")
+        print("These files should be in the same directory as deploy_step_1.py")
         return False
     
     return True
 
 
 def check_requirements():
-    """Check system requirements."""
+    """Check basic system requirements for folder creation."""
     print("Checking system requirements...")
     
     # Check Python version
@@ -45,67 +49,79 @@ def check_requirements():
         return False
     print("[OK] Python version OK")
     
-    # Check for uv (preferred) or pip
+    # Check write permissions
     try:
-        subprocess.run(['uv', '--version'], capture_output=True, check=True)
-        print("[OK] uv package manager available")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        try:
-            subprocess.run([sys.executable, '-m', 'pip', '--version'], 
-                         capture_output=True, check=True)
-            print("[OK] pip package manager available")
-        except subprocess.CalledProcessError:
-            print("[ERROR] No Python package manager found")
-            return False
-    
-    # Check for Node.js and npm
-    try:
-        subprocess.run(['node', '--version'], capture_output=True, check=True)
-        subprocess.run(['npm', '--version'], capture_output=True, check=True)
-        print("[OK] Node.js and npm available")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("[ERROR] Node.js and npm required")
+        test_dir = Path.cwd() / "test_write_permission"
+        test_dir.mkdir(exist_ok=True)
+        test_dir.rmdir()
+        print("[OK] Write permissions OK")
+    except PermissionError:
+        print("[ERROR] No write permissions in current directory")
         return False
     
     return True
 
 
 def main():
-    """Main deployment entry point."""
+    """Main deployment entry point for Step 1."""
     print("=" * 60)
-    print("FLASK + VITE REPOSITORY DEPLOYMENT")
+    print("DEPLOY STEP 1: FOLDER STRUCTURE CREATION")
     print("=" * 60)
     
     # Check system requirements
     if not check_requirements():
-        print("\nSystem requirements not met. Please install:")
-        print("- Python 3.8+")
-        print("- uv (preferred) or pip")
-        print("- Node.js and npm")
+        print("\nSystem requirements not met.")
         sys.exit(1)
     
     # Check for local bootloader files (should be cloned by VelaOS)
     if not check_local_files():
         print("\nBootloader files not found in current directory.")
         print("This script expects to run in a repository with:")
-        print("- flask_vite_bootloader.py")
+        print("- folder_bootloader.py")
         print("- bootloader_config.json")
         sys.exit(1)
     
-    # Execute the bootloader directly (no downloads needed)
-    print("\nStarting Flask + Vite bootloader...")
+    # Execute the folder bootloader directly (no downloads needed)
+    print("\nStarting Step 1: Folder Structure Creation...")
     try:
-        subprocess.run([sys.executable, 'pillar_bootloader.py', '--deploy'], 
-                      check=True)
-        print("\n[SUCCESS] Flask + Vite deployment completed!")
+        result = subprocess.run([sys.executable, 'folder_bootloader.py', '--deploy'], 
+                              check=True, capture_output=True, text=True)
+        
+        # Show the output from folder bootloader
+        if result.stdout:
+            print(result.stdout)
+        
+        print("\n[SUCCESS] Step 1: Folder structure created successfully!")
+        print("\nNext Steps:")
+        print("- Step 2: Python environment setup (uv, .venv)")
+        print("- Step 3: Backend TOML generation")
+        print("- Step 4: Frontend setup (npm)")
+        
     except subprocess.CalledProcessError as e:
-        print(f"\n[ERROR] Deployment failed: {e}")
+        print(f"\n[ERROR] Step 1 failed: {e}")
+        if e.stdout:
+            print("STDOUT:", e.stdout)
+        if e.stderr:
+            print("STDERR:", e.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nDeployment interrupted by user")
-        subprocess.run([sys.executable, 'pillar_bootloader.py', '--stop'])
+        print("\nStep 1 interrupted by user")
         sys.exit(0)
 
 
 if __name__ == '__main__':
-    main()
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Deploy Step 1: Folder Structure Creation")
+    parser.add_argument("--deploy", action="store_true", help="Execute folder structure creation")
+    
+    args = parser.parse_args()
+    
+    if args.deploy:
+        main()
+    else:
+        print("Deploy Step 1 - Use --deploy to create folder structure")
+        print("\nThis is the first step in the ordered deployment process:")
+        print("1. [THIS STEP] Create folder structure")
+        print("2. Setup Python environment (uv, .venv)")
+        print("3. Generate backend TOML")
+        print("4. Setup frontend (npm)")
