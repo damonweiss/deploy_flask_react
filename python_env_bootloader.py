@@ -6,8 +6,8 @@ Sets up Python virtual environment using uv
 Order of Operations:
 1. [DONE] Create folder structure (Step 1)
 2. [THIS STEP] Install uv and create .venv
-3. [NEXT] Generate backend TOML
-4. [NEXT] Setup frontend (npm)
+3. [FUTURE] Generate backend TOML
+4. [FUTURE] Setup frontend (npm)
 """
 
 import os
@@ -181,59 +181,6 @@ if __name__ == '__main__':
             
             # Requirements placeholder (will be replaced by pyproject.toml)
             ("requirements.txt", "# This file is managed by uv and pyproject.toml\n# Use 'uv sync' to install dependencies\n"),
-            
-            # Python gitignore additions
-            (".gitignore", '''# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-'''),
         ]
         
         created_files = []
@@ -261,13 +208,17 @@ logs/
             if not self.check_uv_installed():
                 self.logger.info("uv not found, attempting to install...")
                 if not self.install_uv():
-                    self.logger.error("❌ Failed to install uv - continuing without virtual environment")
-                    return False
+                    self.logger.warning("❌ Failed to install uv - skipping virtual environment")
+                    # Continue without virtual environment
+                    if not self.create_basic_python_files():
+                        self.logger.error("❌ Failed to create Python files")
+                        return False
+                    self.logger.info("✅ Python files created (no virtual environment)")
+                    return True
             
             # Create virtual environment
             if not self.create_virtual_environment():
-                self.logger.error("❌ Failed to create virtual environment")
-                return False
+                self.logger.warning("❌ Failed to create virtual environment - continuing with files only")
             
             # Create basic Python files
             if not self.create_basic_python_files():
@@ -275,38 +226,11 @@ logs/
                 return False
             
             self.logger.info("✅ Python environment setup completed successfully!")
-            self.logger.info("🐍 Virtual environment is ready for development")
-            
-            # Show next steps
-            self._show_next_steps()
+            self.logger.info("🐍 Ready for Flask development")
             
         except Exception as e:
             self.logger.error(f"❌ Python environment setup failed: {e}")
             raise
-    
-    def _show_next_steps(self):
-        """Show next steps for the user."""
-        venv_path = self.project_root / ".venv"
-        
-        self.logger.info("\n" + "="*60)
-        self.logger.info("🚀 PYTHON ENVIRONMENT READY")
-        self.logger.info("="*60)
-        self.logger.info(f"📁 Project root: {self.project_root}")
-        self.logger.info(f"🐍 Virtual environment: {venv_path}")
-        self.logger.info("\n📋 Next Steps:")
-        self.logger.info("   1. ✅ Folder structure created")
-        self.logger.info("   2. ✅ Python environment setup")
-        self.logger.info("   3. 🔄 Generate backend TOML (Step 3)")
-        self.logger.info("   4. 🔄 Setup frontend (Step 4)")
-        
-        # Activation instructions
-        if os.name == 'nt':
-            activate_cmd = f"{venv_path}\\Scripts\\activate"
-        else:
-            activate_cmd = f"source {venv_path}/bin/activate"
-            
-        self.logger.info(f"\n💡 To activate virtual environment:")
-        self.logger.info(f"   {activate_cmd}")
 
 
 def main():
