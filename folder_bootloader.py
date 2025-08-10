@@ -27,8 +27,15 @@ class FolderBootloader:
         # Use VELA_CORE_DIR if available (VelaOS deployment), otherwise current directory
         vela_target = os.environ.get("VELA_CORE_DIR")
         if vela_target:
-            self.project_root = Path(vela_target)
-            print(f"[VelaOS] Using target directory: {self.project_root}")
+            # VELA_CORE_DIR points to deep internal directory like:
+            # C:\...\vela_install_20250810_193432\data\.vela\cores\1.0.0-e34b2e4c
+            # We want the deployment root: C:\...\vela_install_20250810_193432
+            core_path = Path(vela_target)
+            # Go up: cores -> .vela -> data -> deployment_root
+            deployment_root = core_path.parent.parent.parent
+            self.project_root = deployment_root
+            print(f"[VelaOS] Core directory: {core_path}")
+            print(f"[VelaOS] Using deployment root: {self.project_root}")
         else:
             self.project_root = Path.cwd()
             print(f"[Local] Using current directory: {self.project_root}")
