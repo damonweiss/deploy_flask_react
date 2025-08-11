@@ -160,8 +160,18 @@ def main() -> int:
         run_sh = backend / ("run_dev.bat" if os.name == "nt" else "run_dev.sh")
         if not run_sh.exists():
             if os.name == "nt":
-                run_sh.write_text(
-                    textwrap.dedent(
-                        f"""\
-                        @echo off
-                        call "{venv_path}\\Scripts\\activate"
+                content = (
+                    "@echo off\n"
+                    'call "{}\\Scripts\\activate"\n'
+                    "python -m flask --app app.main:create_app run --debug --port 5000\n"
+                ).format(venv_path)
+                run_sh.write_text(content, encoding="utf-8")
+            else:
+                content = (
+                    "#!/usr/bin/env bash\n"
+                    'source "{}/bin/activate"\n'
+                    "python -m flask --app app.main:create_app run --debug --port 5000\n"
+                ).format(venv_path)
+                run_sh.write_text(content, encoding="utf-8")
+                run_sh.chmod(0o755)
+
