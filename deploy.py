@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """
-Deploy Step 1 (+ optional Step 2)
----------------------------------
-Step 1: Create folder structure by calling folder_bootloader.py
-Step 2: (optional) Create Python env by calling python_env_bootloader.py if present
-
-Designed to be called by VelaOS right after repo clone.
+Deploy Orchestrator (VelaOS entry point)
+----------------------------------------
+Step 1: Create folder structure via folder_bootloader.py
+Step 2: (optional) Create Python env via python_env_bootloader.py (if present)
 
 Usage:
-  python deploy_step_1.py                 # Auto-deploy (runs Step 1, and Step 2 if available)
-  python deploy_step_1.py --deploy        # Same as above
-  python deploy_step_1.py --skip-env      # Force Step 1 only
-  python deploy_step_1.py --help-only     # Show help only
+  python deploy.py                   # Auto-deploy (Step 1, then Step 2 if available)
+  python deploy.py --skip-env        # Force Step 1 only
+  python deploy.py --help-only       # Show help
+  python deploy.py --verbose         # DEBUG logging
 """
 
 from __future__ import annotations
@@ -21,155 +19,156 @@ import logging
 import os
 import sys
 import subprocess
+import traceback
 from datetime import datetime
 from pathlib import Path
 
-# ---- Early, visible boot trace (after imports to avoid NameError) ----
-print("[DEPLOY] Script starting…")
-print(f"[DEPLOY] Python: {sys.version.split()[0]}")
-print(f"[DEPLOY] CWD: {os.getcwd()}")
-print(f"[DEPLOY] Script: {Path(__file__).resolve()}")
+# --- Establish repo root & chdir early (avoid relative-path issues) ---
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parent
+os.chdir(REPO_ROOT)
 
-# ---- Logging setup ----
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('deployment.log'), logging.StreamHandler()]
-)
+# --- Early visible boot trace (after imports so sys/os exist) ---
+print("[DEPLOY] starting…")
+print(f"[DEPLOY] python: {sys.version.split()[0]}")
+print(f"[DEPLOY] cwd: {os.getcwd()}")
+print(f"[DEPLOY] script: {SCRIPT_PATH}")
+
+# --- Logging setup ---
+def setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='[%(asctime)s] %(levelname)s - %(message)s',
+        handlers=[logging.FileHandler('deployment.log', encoding='utf-8'), logging.StreamHandler()]
+    )
+
 logger = logging.getLogger(__name__)
 
 
 # ---------- Helpers ----------
 def check_requirements() -> bool:
-    """Basic preflight checks."""
     logger.info("Checking system requirements…")
     if sys.version_info < (3, 8):
         logger.error("Python 3.8+ required")
         return False
-
+    # write permission probe
     try:
-        probe = Path.cwd() / ".write_probe__remove_me"
-        probe.mkdir(exist_ok=True)
-        probe.rmdir()
+        p = REPO_ROOT / ".write_probe__remove_me"
+        p.mkdir(exist_ok=True)
+        p.rmdir()
     except PermissionError:
-        logger.error("No write permission in current directory")
+        logger.error("No write permission in repo directory")
         return False
-
     logger.info("System requirements OK")
     return True
 
 
-def have_file(fname: str) -> bool:
-    return Path(fname).exists()
+def have_file(name: str) -> bool:
+    return (REPO_ROOT / name).exists()
 
 
 def check_local_files(require_env: bool) -> bool:
-    """
-    Ensure expected files exist in the same directory as this script.
-    require_env=True also requires python_env_bootloader.py.
-    """
-    base_required = ["folder_bootloader.py", "bootloader_config.json"]
-    env_required = ["python_env_bootloader.py"] if require_env else []
+    base = ["folder_bootloader.py", "bootloader_config.json"]
+    env = ["python_env_bootloader.py"] if require_env else []
+    missing = [f for f in (base + env) if not have_file(f)]
 
-    missing = [f for f in (base_required + env_required) if not have_file(f)]
-    for f in (base_required + env_required):
+    logger.info("Top-level files: %s", [p.name for p in REPO_ROOT.iterdir() if p.is_file() or p.is_dir()])
+    for f in (base + env):
         if f in missing:
-            logger.error(f"[MISSING] {f}")
+            logger.error("[MISSING] %s", f)
         else:
-            logger.info(f"[OK] Found {f}")
+            logger.info("[OK] %s", f)
 
-    if missing:
-        return False
-    return True
+    return not missing
 
 
-def run_step(step_name: str, cmd: list[str]) -> None:
-    """Run a subprocess step with nice logging and error surfacing."""
+def run_step(title: str, cmd: list[str]) -> None:
     logger.info("=" * 60)
-    logger.info(f"{step_name} - starting")
-    logger.info(f"Command: {' '.join(cmd)}")
+    logger.info("%s - starting", title)
+    logger.info("Command: %s", " ".join(cmd))
     try:
         res = subprocess.run(cmd, check=True, capture_output=True, text=True)
         if res.stdout:
-            logger.info(f"{step_name} STDOUT:")
+            logger.info("%s STDOUT:", title)
             for line in res.stdout.strip().splitlines():
                 if line.strip():
-                    logger.info(f"  {line}")
+                    logger.info("  %s", line)
         if res.stderr:
-            logger.warning(f"{step_name} STDERR:")
+            logger.warning("%s STDERR:", title)
             for line in res.stderr.strip().splitlines():
                 if line.strip():
-                    logger.warning(f"  {line}")
-        logger.info(f"{step_name} - success")
+                    logger.warning("  %s", line)
+        logger.info("%s - success", title)
     except subprocess.CalledProcessError as e:
-        logger.error(f"{step_name} - FAILED (exit {e.returncode})")
+        logger.error("%s - FAILED (exit %s)", title, e.returncode)
         if e.stdout:
-            logger.error(f"{step_name} STDOUT:")
+            logger.error("%s STDOUT:", title)
             for line in e.stdout.strip().splitlines():
                 if line.strip():
-                    logger.error(f"  {line}")
+                    logger.error("  %s", line)
         if e.stderr:
-            logger.error(f"{step_name} STDERR:")
+            logger.error("%s STDERR:", title)
             for line in e.stderr.strip().splitlines():
                 if line.strip():
-                    logger.error(f"  {line}")
+                    logger.error("  %s", line)
         raise
     except KeyboardInterrupt:
-        logger.error(f"{step_name} - interrupted by user")
+        logger.error("%s - interrupted by user", title)
+        raise
+    except Exception:
+        logger.exception("%s - unexpected exception", title)
         raise
 
 
-# ---------- Main ----------
-def main(skip_env: bool = False) -> None:
+def main(skip_env: bool, verbose: bool) -> None:
+    setup_logging(verbose)
     logger.info("=" * 60)
-    logger.info("DEPLOY: Step 1 (+ optional Step 2)")
+    logger.info("DEPLOY orchestrator (Step 1 + optional Step 2)")
     logger.info("=" * 60)
-    logger.info(f"Start time: {datetime.now().isoformat(timespec='seconds')}")
-    logger.info(f"Python exe: {sys.executable}")
-    logger.info(f"Working dir: {os.getcwd()}")
-    logger.info(f"Script path: {Path(__file__).resolve()}")
+    logger.info("Start: %s", datetime.now().isoformat(timespec="seconds"))
+    logger.info("Python exe: %s", sys.executable)
+    logger.info("Repo root: %s", REPO_ROOT)
 
-    # Helpful for diagnostics in VelaOS environments
     vela_core_dir = os.environ.get("VELA_CORE_DIR")
     if vela_core_dir:
-        logger.info(f"VELA_CORE_DIR={vela_core_dir}")
+        logger.info("VELA_CORE_DIR=%s", vela_core_dir)
     else:
         logger.info("VELA_CORE_DIR not set (local mode)")
 
     if not check_requirements():
-        print("\n[ERROR] System requirements not met.")
+        print("\n[ERROR] System requirements not met. See deployment.log")
         sys.exit(1)
 
-    # Decide whether we *require* Step 2 assets
     step2_present = have_file("python_env_bootloader.py")
     require_env_assets = (not skip_env) and step2_present
 
     if not check_local_files(require_env=require_env_assets):
-        print("\n[ERROR] Required bootloader files are missing.")
+        print("\n[ERROR] Required bootloader files are missing. See deployment.log")
         if not step2_present and not skip_env:
-            print("Tip: 'python_env_bootloader.py' not found; run with --skip-env or add the file.")
+            print("Tip: 'python_env_bootloader.py' not found; rerun with --skip-env or add the file.")
         sys.exit(1)
 
-    # ---- Step 1: Folder Structure ----
+    # Step 1
     try:
         run_step("Step 1: Folder Structure Creation", [sys.executable, "folder_bootloader.py", "--deploy"])
     except Exception:
         print("\n[ERROR] Step 1 failed. See deployment.log for details.")
         sys.exit(1)
 
-    # ---- Step 2: Python Env (optional) ----
+    # Step 2 (optional)
     if not skip_env:
         if step2_present:
             try:
                 run_step("Step 2: Python Environment Setup", [sys.executable, "python_env_bootloader.py", "--deploy"])
             except Exception:
-                print("\n[FAILED] Step 2 failed. Step 1 completed successfully.")
+                print("\n[FAILED] Step 2 failed. Step 1 completed successfully. See deployment.log")
                 sys.exit(1)
         else:
             logger.info("Step 2 skipped (python_env_bootloader.py not found).")
             print("\n[NOTICE] Step 2 skipped (python_env_bootloader.py not found).")
 
-    # ---- Done ----
+    # Done
     print("\n" + "=" * 60)
     print("DEPLOYMENT COMPLETE")
     print("=" * 60)
@@ -180,27 +179,32 @@ def main(skip_env: bool = False) -> None:
         print("⏭ Step 2: Skipped by flag (--skip-env)")
     else:
         print("⏭ Step 2: Skipped (python_env_bootloader.py not found)")
-
     print("\nNext steps:")
     print("- Step 3: Backend TOML generation")
     print("- Step 4: Frontend setup (npm)")
-    print("\nCheck deployment.log for a full transcript.")
+    print("\nSee deployment.log for full transcript.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Deploy Step 1 (+ optional Step 2)")
-    parser.add_argument("--deploy", action="store_true", help="Execute deployment (default behavior)")
+    parser = argparse.ArgumentParser(description="VelaOS Deploy Orchestrator")
+    parser.add_argument("--deploy", action="store_true", help="Execute deployment (default)")
     parser.add_argument("--skip-env", action="store_true", help="Run Step 1 only (skip Python env)")
     parser.add_argument("--help-only", action="store_true", help="Show help only (no deploy)")
+    parser.add_argument("--verbose", action="store_true", help="DEBUG logging")
     args = parser.parse_args()
 
     if args.help_only:
         print(__doc__)
         sys.exit(0)
 
-    # Default behavior: auto-deploy
     try:
-        main(skip_env=args.skip_env)
+        main(skip_env=args.skip_env, verbose=args.verbose)
     except KeyboardInterrupt:
         print("\n[ABORTED] Interrupted by user.")
+        sys.exit(1)
+    except SystemExit as e:
+        raise
+    except Exception:
+        # Ensure non-zero exit and a traceback for the bootloader
+        traceback.print_exc()
         sys.exit(1)
