@@ -53,9 +53,7 @@ def ensure_backend(root: Path) -> Path:
     return backend
 
 def write_requirements(requirements_path: Path) -> None:
-    if requirements_path.exists():
-        return
-    requirements_path.parent.mkdir(parents=True, exist_ok=True)
+    ...
     lines = [
         "flask>=3.0,<4",
         "blinker>=1.7,<2",
@@ -63,9 +61,9 @@ def write_requirements(requirements_path: Path) -> None:
         "Jinja2>=3.1,<4",
         "itsdangerous>=2.2,<3",
         "click>=8.1,<9",
-        # "python-dotenv>=1.0,<2",
+        "MarkupSafe>=2.1.5,<3",   # <-- add this
     ]
-    requirements_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
 
 def ensure_minimum_stack(requirements_path: Path) -> None:
     needed = {
@@ -75,7 +73,9 @@ def ensure_minimum_stack(requirements_path: Path) -> None:
         "jinja2": "Jinja2>=3.1,<4",
         "itsdangerous": "itsdangerous>=2.2,<3",
         "click": "click>=8.1,<9",
+        "markupsafe": "MarkupSafe>=2.1.5,<3",  # <-- add this
     }
+    
     try:
         lines = requirements_path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -138,7 +138,7 @@ def install_requirements(python_exe: str, requirements_path: Path) -> None:
 
 def verify_stack(python_exe: str) -> None:
     code = (
-        "mods=['flask','werkzeug','jinja2','click','itsdangerous','blinker'];"
+        "mods=['flask','werkzeug','jinja2','click','itsdangerous','blinker','markupsafe'];"
         "missing=[]\n"
         "import importlib\n"
         "for m in mods:\n"
@@ -274,6 +274,19 @@ def main() -> int:
             print(f"[STEP2] requirements={reqs_path}")
 
         install_requirements(python_exe, reqs_path)
+        
+        # Hotfix: if markupsafe still missing, try installing a wheel explicitly
+        probe = subprocess.run([python_exe, "-c", "import markupsafe"], capture_output=True, text=True)
+        if probe.returncode != 0:
+            fix = subprocess.run(
+                [python_exe, "-m", "pip", "install", "--only-binary=:all:", "MarkupSafe>=2.1.5,<3"],
+                capture_output=True, text=True
+            )
+            sys.stdout.write(fix.stdout or "")
+            if fix.returncode != 0:
+                sys.stderr.write(fix.stderr or "")
+                raise SystemError("MarkupSafe wheel install failed; ensure Python 3.12 and internet access.")
+        
         verify_stack(python_exe)
         write_run_scripts(root, venv_path)
 
