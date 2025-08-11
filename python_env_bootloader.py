@@ -15,6 +15,10 @@ from __future__ import annotations
 import argparse, logging, os, sys, subprocess, shutil
 from pathlib import Path
 
+# --- very top, after imports ---
+import sys, os
+print(f"[STEP2] import OK. pid={os.getpid()} argv={sys.argv}", flush=True)
+
 ROOT = Path(__file__).resolve().parent
 DEFAULT_VENV = ROOT / ".venv"
 DEFAULT_REQS = ROOT / "requirements.txt"
@@ -127,13 +131,14 @@ def main() -> int:
     return 0
 
 if __name__ == "__main__":
-    log.info("Trying...")
+    print("[STEP2] entering __main__", flush=True)
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        logging.getLogger(__name__).error("Interrupted by user")
+        print("[STEP2] interrupted", flush=True)
         sys.exit(1)
-    except Exception:
+    except Exception as e:
         import traceback
-        traceback.print_exc()
+        traceback.print_exc()   # goes to STDERR (deploy.py will capture)
+        print(f"[STEP2] crashed: {e}", flush=True)
         sys.exit(1)
