@@ -12,40 +12,19 @@ Usage:
     python deploy_step_1.py --help-only     # Show help only
 """
 
-# IMMEDIATE DEBUG OUTPUT - before any imports that might fail
-print("[DEPLOY_STEP_1_FIXED] Script starting...")
-print(f"[DEPLOY_STEP_1_FIXED] Python version: {sys.version}")
-print(f"[DEPLOY_STEP_1_FIXED] Current directory: {os.getcwd()}")
-print(f"[DEPLOY_STEP_1_FIXED] Script file: {__file__}")
-
 import os
 import sys
 import subprocess
 from pathlib import Path
 import argparse
 import logging
-from datetime import datetime
-
-print("[DEPLOY_STEP_1_FIXED] All imports successful")
-
-
-# Setup comprehensive logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('deployment.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
 
 
 def check_local_files():
     """Check that required files are present locally."""
     print("Checking for local bootloader files...")
     
-    required_files = ['folder_bootloader.py', 'python_env_bootloader.py', 'bootloader_config.json']
+    required_files = ['folder_bootloader.py', 'bootloader_config.json']
     missing_files = []
     
     for filename in required_files:
@@ -56,7 +35,7 @@ def check_local_files():
     
     if missing_files:
         print(f"[ERROR] Missing files: {', '.join(missing_files)}")
-        print("These files should be in the same directory as deploy script")
+        print("These files should be in the same directory as deploy_step_1.py")
         return False
     
     return True
@@ -86,133 +65,50 @@ def check_requirements():
 
 
 def main():
-    """Main deployment entry point."""
-    logger.info("=" * 60)
-    logger.info("DEPLOY STEP 1+2: FOLDER STRUCTURE + PYTHON ENV")
-    logger.info("=" * 60)
-    logger.info(f"Starting deployment at {datetime.now()}")
-    logger.info(f"Python version: {sys.version}")
-    logger.info(f"Current working directory: {os.getcwd()}")
-    logger.info(f"Script path: {__file__}")
+    """Main deployment entry point for Step 1."""
+    print("=" * 60)
+    print("DEPLOY STEP 1: FOLDER STRUCTURE CREATION")
+    print("=" * 60)
     
-    # Log environment variables
-    vela_core_dir = os.environ.get("VELA_CORE_DIR")
-    if vela_core_dir:
-        logger.info(f"VELA_CORE_DIR detected: {vela_core_dir}")
-    else:
-        logger.info("VELA_CORE_DIR not set - running in local mode")
+    # Check system requirements
+    if not check_requirements():
+        print("\nSystem requirements not met.")
+        sys.exit(1)
     
-    # Check if we have the required files locally
-    logger.info("Checking for required bootloader files...")
+    # Check for local bootloader files (should be cloned by VelaOS)
     if not check_local_files():
-        logger.error("Bootloader files not found in current directory.")
-        logger.error("This script expects to run in a repository with:")
-        logger.error("- folder_bootloader.py")
-        logger.error("- python_env_bootloader.py")
-        logger.error("- bootloader_config.json")
+        print("\nBootloader files not found in current directory.")
+        print("This script expects to run in a repository with:")
+        print("- folder_bootloader.py")
+        print("- bootloader_config.json")
         sys.exit(1)
     
     # Execute the folder bootloader directly (no downloads needed)
-    logger.info("Starting Step 1: Folder Structure Creation...")
-    logger.info(f"Executing command: {sys.executable} folder_bootloader.py --deploy")
+    print("\nStarting Step 1: Folder Structure Creation...")
     try:
         result = subprocess.run([sys.executable, 'folder_bootloader.py', '--deploy'], 
                               check=True, capture_output=True, text=True)
         
-        logger.info("Step 1 subprocess completed successfully")
         # Show the output from folder bootloader
         if result.stdout:
-            logger.info("Step 1 STDOUT:")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.info(f"  {line}")
+            print(result.stdout)
         
-        if result.stderr:
-            logger.warning("Step 1 STDERR:")
-            for line in result.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.warning(f"  {line}")
-        
-        logger.info("[SUCCESS] Step 1: Folder structure created successfully!")
+        print("\n[SUCCESS] Step 1: Folder structure created successfully!")
+        print("\nNext Steps:")
+        print("- Step 2: Python environment setup (uv, .venv)")
+        print("- Step 3: Backend TOML generation")
+        print("- Step 4: Frontend setup (npm)")
         
     except subprocess.CalledProcessError as e:
-        logger.error(f"[ERROR] Step 1 failed with exit code {e.returncode}")
+        print(f"\n[ERROR] Step 1 failed: {e}")
         if e.stdout:
-            logger.error("Step 1 STDOUT:")
-            for line in e.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
+            print("STDOUT:", e.stdout)
         if e.stderr:
-            logger.error("Step 1 STDERR:")
-            for line in e.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
+            print("STDERR:", e.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.error("Step 1 interrupted by user")
-        sys.exit(1)
-    
-    # Step 2: Python Environment Setup
-    logger.info("Starting Step 2: Python Environment Setup...")
-    logger.info(f"Executing command: {sys.executable} python_env_bootloader.py --deploy")
-    try:
-        result = subprocess.run([sys.executable, 'python_env_bootloader.py', '--deploy'], 
-                              check=True, capture_output=True, text=True)
-        
-        logger.info("Step 2 subprocess completed successfully")
-        # Show the output from python env bootloader
-        if result.stdout:
-            logger.info("Step 2 STDOUT:")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.info(f"  {line}")
-        
-        if result.stderr:
-            logger.warning("Step 2 STDERR:")
-            for line in result.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.warning(f"  {line}")
-        
-        logger.info("[SUCCESS] Step 2: Python environment setup completed!")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"[ERROR] Step 2 failed with exit code {e.returncode}")
-        if e.stdout:
-            logger.error("Step 2 STDOUT:")
-            for line in e.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        if e.stderr:
-            logger.error("Step 2 STDERR:")
-            for line in e.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
-        logger.error("[FAILED] Step 2 failed - check logs above")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.error("Step 2 interrupted by user")
-        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
-        sys.exit(1)
-    
-    # Final success message
-    print("\n" + "="*60)
-    print("DEPLOYMENT SUCCESSFUL!")
-    print("="*60)
-    print("Step 1: Folder structure created")
-    print("Step 2: Python environment setup")
-    print("\nYour Flask + Vite project is ready for development!")
-    
-    print("\nWhat was created:")
-    print("- Project folder structure (backend/, frontend/, tests/, etc.)")
-    print("- Python virtual environment (.venv)")
-    print("- Basic Flask application files")
-    print("- Comprehensive .gitignore")
-    
-    print("\nNext steps:")
-    print("- Activate virtual environment")
-    print("- Install additional dependencies as needed")
-    print("- Start developing your Flask + Vite application")
+        print("\nStep 1 interrupted by user")
+        sys.exit(0)
 
 
 if __name__ == '__main__':
