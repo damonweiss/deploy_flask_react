@@ -11,7 +11,9 @@ Usage:
   python deploy.py --skip-vite     # Skip Vite step even if npm exists
   python deploy.py --skip-step1    # Skip folder structure step
   python deploy.py --skip-step2    # Skip Python env step
-  python deploy.py --force-vite    # Run Vite step even if npm isn't detected (will likely fail)
+  python deploy.py --force-vite    # Run Vite step even if npm isn't detected
+  python deploy.py --python 3.12   # Choose venv Python (default 3.12; or set VELA_PYTHON)
+  python deploy.py --allow-build   # Allow building MarkupSafe from source if needed
   python deploy.py --help-only
 """
 
@@ -42,7 +44,7 @@ def run_cmd(cmd: list[str], cwd: Path | None = None) -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        shell=(os.name == "nt")
+        shell=False,  # keep False; cross-platform and safe
     )
     try:
         assert proc.stdout is not None
@@ -76,9 +78,7 @@ def check_local_files(skip1: bool, skip2: bool, skip_vite: bool) -> bool:
         missing.append("folder_bootloader.py")
     if not skip2 and not (THIS_DIR / "python_env_bootloader.py").exists():
         missing.append("python_env_bootloader.py")
-    if not skip_vite and not (THIS_DIR / "vite_bootloader.py").exists():
-        # not fatal; we’ll skip if missing unless forced
-        pass
+    # vite_bootloader.py is optional unless forced
     if missing:
         print(f"[ERROR] Missing required file(s): {', '.join(missing)}")
         return False
@@ -108,30 +108,28 @@ def run_step_1() -> bool:
     print("[OK] Step 1 complete")
     return True
 
-def run_step_2() -> bool:
+def run_step_2(start_now: bool, python_target: str, allow_build: bool) -> bool:
     print("\n=== STEP 2: Python Env Setup (backend) ===")
-    target_py = os.environ.get("VELA_PYTHON", "3.12")  # << baseline here
     cmd = [
         sys.executable,
         str(THIS_DIR / "python_env_bootloader.py"),
         "--deploy",
         "--venv-dir", "backend/.venv",
         "--requirements", "backend/requirements.txt",
-        "--python", target_py,
-        "--start-now",
+        "--python", python_target,
         "--verbose",
     ]
-    try:
-        res = subprocess.run(cmd, check=False, capture_output=True, text=True)
-        if res.stdout: print(res.stdout, end="")
-        if res.stderr: print(res.stderr, end="")
-        if res.returncode != 0:
-            print(f"[ERROR] Step 2 failed (exit {res.returncode})")
-            return False
-        print("[OK] Step 2 complete")
-        return True
-    except Exception as e:
-        print(f"[ERRO
+    if start_now:
+        cmd.append("--start-now")
+    if allow_build:
+        cmd.append("--allow-build")
+
+    rc = run_cmd(cmd, cwd=THIS_DIR)
+    if rc != 0:
+        print(f"[ERROR] Step 2 failed (exit {rc})")
+        return False
+    print("[OK] Step 2 complete")
+    return True
 
 def run_step_4_vite(force_vite: bool) -> bool:
     print("\n=== STEP 4: Frontend (Vite + React) ===")
@@ -181,6 +179,10 @@ def main() -> int:
     ap.add_argument("--skip-step1", action="store_true", help="Skip Step 1 (folder structure)")
     ap.add_argument("--skip-step2", action="store_true", help="Skip Step 2 (python env)")
     ap.add_argument("--force-vite", action="store_true", help="Run Vite step even if npm not detected")
+    ap.add_argument("--python", default=os.environ.get("VELA_PYTHON", "3.12"),
+                    help="Target Python for the venv (major.minor or full path). Defaults to env VELA_PYTHON or 3.12.")
+    ap.add_argument("--allow-build", action="store_true",
+                    help="Allow building MarkupSafe from source if no wheels (needs C build tools).")
     args, _ = ap.parse_known_args()
 
     if args.help_only:
@@ -203,7 +205,7 @@ def main() -> int:
 
     # Step 2
     started = not args.no_start
-    if not args.skip_step2 and not run_step_2(start_now=started):
+    if not args.skip_step2 and not run_step_2(start_now=started, python_target=args.python, allow_build=args.allow_build):
         return 3
 
     # Step 4 (Vite)
@@ -211,15 +213,13 @@ def main() -> int:
     if not args.skip_vite:
         ok = run_step_4_vite(force_vite=args.force_vite)
         if not ok:
-            # Don’t fail the whole deploy if Vite is optional; fail only if explicitly forced.
             if args.force_vite:
                 return 4
             print("[WARN] Vite step skipped/failed; backend is still ready.")
         else:
             ran_vite = True
 
-    # If we started only Flask (because Vite was skipped), and we *did* run Vite just now,
-    # ensure both are up via unified starter (overwritten by Vite step).
+    # If we started Flask and we also ran Vite, re-run unified starter
     if started and ran_vite:
         print("\n[INFO] Starting unified dev servers (Flask + Vite)...")
         run_cmd([sys.executable, str(root / "start_server.py")], cwd=root)
