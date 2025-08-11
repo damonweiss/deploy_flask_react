@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Deploy: Step 1 (structure) + Step 2 (python env)
+Deploy: Step 1 (structure) + Step 2 (python env + start Flask)
 - Step 1: create folder structure (folder_bootloader.py)
-- Step 2: create backend venv + install Python deps
+- Step 2: create backend venv + install Flask + write start/stop scripts
 """
 
 from __future__ import annotations
@@ -27,14 +27,12 @@ def check_requirements() -> bool:
 
 def check_local_files() -> bool:
     missing = []
-    for fname in ("folder_bootloader.py",):
+    for fname in ("folder_bootloader.py", "python_env_bootloader.py"):
         if not (THIS_DIR / fname).exists():
             missing.append(fname)
     if missing:
         print(f"[ERROR] Missing required file(s): {', '.join(missing)}")
         return False
-
-    # Optional config: bootloader_config.json
     if not (THIS_DIR / "bootloader_config.json").exists():
         print("[INFO] bootloader_config.json not found — defaults will be used by Step 1")
     return True
@@ -57,15 +55,13 @@ def run_step_1() -> bool:
 
 def run_step_2() -> bool:
     print("\n=== STEP 2: Python Env Setup (backend) ===")
-    # Target venv + requirements locations in the deployment root backend/
-    # Step 2 resolves deployment root via VELA_CORE_DIR (or falls back to cwd)
     cmd = [
         sys.executable,
         str(THIS_DIR / "python_env_bootloader.py"),
         "--deploy",
         "--venv-dir", "backend/.venv",
         "--requirements", "backend/requirements.txt",
-        "--strict-reqs",
+        "--start-now",
         "--verbose",
     ]
     try:
@@ -101,7 +97,8 @@ def main() -> int:
 
     print("\n[SUCCESS] Steps 1 & 2 finished.")
     print("- Backend Python venv ready at backend/.venv")
-    print("- Next: Step 3 (backend TOML/config) & Step 4 (frontend/Vite + proxy)")
+    print("- Flask dev server should now be running on http://127.0.0.1:5000")
+    print("- Use: python stop_servers.py  to stop it")
     return 0
 
 if __name__ == "__main__":
