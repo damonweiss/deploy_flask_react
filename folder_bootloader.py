@@ -182,19 +182,19 @@ class FolderBootloader:
         try:
             created_folders = self.create_folder_structure()
             
-            self.logger.info("✅ Folder structure deployment completed successfully!")
-            self.logger.info("📁 Project structure is ready for development")
+            self.logger.info("Folder structure deployment completed successfully!")
+            self.logger.info("Project structure is ready for development")
             
             # Show structure
             self._show_structure()
             
         except Exception as e:
-            self.logger.error(f"❌ Deployment failed: {e}")
+            self.logger.error(f"[X] Deployment failed: {e}")
             raise
     
     def _show_structure(self):
         """Show the created project structure."""
-        self.logger.info("\n📂 Project Structure Created:")
+        self.logger.info("\nProject Structure Created:")
         self.logger.info("├── backend/")
         self.logger.info("│   └── app/")
         self.logger.info("│       ├── routes/")
