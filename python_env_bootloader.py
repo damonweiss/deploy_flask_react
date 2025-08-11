@@ -5,11 +5,14 @@ Python Env Bootloader (STEP 2)
 - Ensures backend/ exists
 - Creates backend/.venv (or given --venv-dir)
 - Writes backend/requirements.txt (if missing)
-- Installs requirements via uv (preferred) or pip
+- Installs requirements via uv (preferred) or pip (bootstraps pip if missing)
 """
 
 from __future__ import annotations
-import os, sys, subprocess, shutil
+import os
+import sys
+import subprocess
+import shutil
 from pathlib import Path
 import argparse
 import textwrap
@@ -18,95 +21,98 @@ def resolve_deployment_root() -> Path:
     core_dir = os.environ.get("VELA_CORE_DIR")
     if core_dir:
         p = Path(core_dir).resolve()
-        # Expect: cores -> .vela -> data -> <deployment_root>
-        # Walk up 4 levels safely; fallback to cwd if not enough parents
+        # cores -> .vela -> data -> <deployment_root>
         try:
-            root = p.parents[3]
-            return root
+            return p.parents[3]
         except IndexError:
             pass
     return Path.cwd().resolve()
 
 def ensure_backend(root: Path) -> Path:
     backend = root / "backend"
-    backend.mkdir(parents=True, exist_ok=True)
     (backend / "app").mkdir(parents=True, exist_ok=True)
-    # Seed minimal Flask app if not present
     init_py = backend / "app" / "__init__.py"
     main_py = backend / "app" / "main.py"
     if not init_py.exists():
         init_py.write_text("# Flask app init\n", encoding="utf-8")
     if not main_py.exists():
         main_py.write_text(
-            textwrap.dedent("""\
-            from flask import Flask, jsonify
+            textwrap.dedent(
+                """\
+                from flask import Flask, jsonify
 
-            def create_app():
-                app = Flask(__name__)
+                def create_app():
+                    app = Flask(__name__)
 
-                @app.get("/api/health")
-                def health():
-                    return jsonify({"status": "ok"})
+                    @app.get("/api/health")
+                    def health():
+                        return jsonify({"status": "ok"})
 
-                return app
+                    return app
 
-            if __name__ == "__main__":
-                app = create_app()
-                app.run(host="127.0.0.1", port=5000, debug=True)
-            """),
+                if __name__ == "__main__":
+                    app = create_app()
+                    app.run(host="127.0.0.1", port=5000, debug=True)
+                """
+            ),
             encoding="utf-8",
         )
     return backend
 
-def write_requirements(backend: Path, requirements_path: Path, strict: bool) -> None:
+def write_requirements(backend: Path, requirements_path: Path) -> None:
     if requirements_path.exists():
         return
-    # Keep it minimal; you can expand later
+    requirements_path.parent.mkdir(parents=True, exist_ok=True)
     reqs = [
         "flask>=3.0,<4",
-        # "python-dotenv>=1.0,<2",  # uncomment if you want .env support
+        # "python-dotenv>=1.0,<2",
     ]
     requirements_path.write_text("\n".join(reqs) + "\n", encoding="utf-8")
 
 def create_venv(venv_dir: Path) -> tuple[Path, str]:
     venv_dir.mkdir(parents=True, exist_ok=True)
-    # Try uv first
     uv = shutil.which("uv")
     if uv:
-        # uv venv creates if missing; no-op if exists
-        cmd = [uv, "venv", str(venv_dir)]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run([uv, "venv", str(venv_dir)], capture_output=True, text=True)
         if res.returncode != 0:
             print(res.stdout, end="")
             print(res.stderr, end="")
             raise SystemError("uv venv failed")
-        py = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
-        return venv_dir, py
+        python_exe = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+        return venv_dir, python_exe
 
-    # Fallback: python -m venv
-    res = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
-                         capture_output=True, text=True)
+    res = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
     if res.returncode != 0:
         print(res.stdout, end="")
         print(res.stderr, end="")
         raise SystemError("venv creation failed")
-    py = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
-    return venv_dir, py
+    python_exe = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+    return venv_dir, python_exe
+
+def ensure_pip(python_exe: str) -> None:
+    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True)
+    if chk.returncode == 0:
+        return
+    ep = subprocess.run([python_exe, "-m", "ensurepip", "--upgrade"], capture_output=True, text=True)
+    print(ep.stdout, end="")
+    print(ep.stderr, end="")
+    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True)
+    if chk.returncode != 0:
+        raise SystemError("pip is unavailable in the virtual environment")
 
 def install_requirements(python_exe: str, requirements_path: Path) -> None:
     uv = shutil.which("uv")
     if uv:
-        cmd = [uv, "pip", "sync", str(requirements_path)]
-        res = subprocess.run(cmd, capture_output=True, text=True, cwd=str(requirements_path.parent))
+        res = subprocess.run([uv, "pip", "sync", str(requirements_path)],
+                             capture_output=True, text=True, cwd=str(requirements_path.parent))
         print(res.stdout, end="")
         if res.returncode != 0:
             print(res.stderr, end="")
             raise SystemError("uv pip sync failed")
         return
 
-    # Fallback to pip
-    cmd = [python_exe, "-m", "pip", "install", "-r", str(requirements_path)]
-    res = subprocess.run(cmd, capture_output=True, text=True, cwd=str(requirements_path.parent))
+    res = subprocess.run([python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
+                         capture_output=True, text=True, cwd=str(requirements_path.parent))
     print(res.stdout, end="")
     if res.returncode != 0:
         print(res.stderr, end="")
@@ -119,7 +125,7 @@ def main() -> int:
     ap.add_argument("--venv-dir", default="backend/.venv")
     ap.add_argument("--requirements", default="backend/requirements.txt")
     ap.add_argument("--strict-reqs", action="store_true", help="Fail if requirements missing")
-    ap.add_argument("--config")  # reserved
+    ap.add_argument("--config")
     args, _ = ap.parse_known_args()
 
     root = resolve_deployment_root()
@@ -134,14 +140,15 @@ def main() -> int:
 
     try:
         if not reqs_path.exists():
-            # Only fail strict if user provided a non-default path explicitly
-            default_req = (args.requirements == "backend/requirements.txt")
-            if args.strict_reqs and not default_req:
-             print(f"[STEP2] --strict-reqs set and requirements file missing: {reqs_path}")
-             return 2
-         write_requirements(backend, reqs_path, strict=args.strict_reqs)
+            # For first run, auto-create requirements unless user explicitly asked for strict
+            if args.strict_reqs and args.requirements != "backend/requirements.txt":
+                print(f"[STEP2] --strict-reqs set and requirements file missing: {reqs_path}")
+                return 2
+            write_requirements(backend, reqs_path)
 
         venv_path, python_exe = create_venv(venv_dir)
+        ensure_pip(python_exe)
+
         if args.verbose:
             print(f"[STEP2] venv={venv_path}")
             print(f"[STEP2] python={python_exe}")
@@ -149,40 +156,12 @@ def main() -> int:
 
         install_requirements(python_exe, reqs_path)
 
-        # Create a tiny run script for convenience
+        # Convenience run script
         run_sh = backend / ("run_dev.bat" if os.name == "nt" else "run_dev.sh")
         if not run_sh.exists():
             if os.name == "nt":
                 run_sh.write_text(
-                    textwrap.dedent(f"""\
-                    @echo off
-                    call "{venv_path}\\Scripts\\activate"
-                    python -m flask --app app.main:create_app run --debug --port 5000
-                    """),
-                    encoding="utf-8",
-                )
-            else:
-                run_sh.write_text(
-                    textwrap.dedent(f"""\
-                    #!/usr/bin/env bash
-                    source "{venv_path}/bin/activate"
-                    python -m flask --app app.main:create_app run --debug --port 5000
-                    """),
-                    encoding="utf-8",
-                )
-                run_sh.chmod(0o755)
-
-        print(f"[STEP2] Backend venv ready: {venv_path}")
-        print(f"[STEP2] Requirements installed from: {reqs_path}")
-        print("[STEP2] Python Env Bootloader: SUCCESS")
-        return 0
-
-    except KeyboardInterrupt:
-        print("[STEP2] Interrupted")
-        return 130
-    except Exception as e:
-        print(f"[STEP2] ERROR: {e}")
-        return 1
-
-if __name__ == "__main__":
-    sys.exit(main())
+                    textwrap.dedent(
+                        f"""\
+                        @echo off
+                        call "{venv_path}\\Scripts\\activate"
