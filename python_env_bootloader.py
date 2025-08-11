@@ -166,8 +166,8 @@ def write_start_stop_scripts(root: Path) -> None:
     stop_py  = root / "stop_servers.py"
 
     if not start_py.exists():
-        start_py.write_text(textwrap.dedent(f"""\
-            import os, sys, subprocess, time, json
+        start_py.write_text(textwrap.dedent("""\
+            import os, sys, subprocess, time, json, importlib
             from pathlib import Path
 
             ROOT = Path(__file__).parent
@@ -175,25 +175,62 @@ def write_start_stop_scripts(root: Path) -> None:
             PY   = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             PIDF = ROOT / ".pids.json"
 
-            def run():
+            def _record_pid(kind, pid):
+                P = {}
+                if PIDF.exists():
+                    try: P = json.loads(PIDF.read_text())
+                    except Exception: P = {}
+                P[kind] = pid
+                PIDF.write_text(json.dumps(P), encoding="utf-8")
+
+            def _already_running(kind):
+                if not PIDF.exists(): return None
+                try:
+                    P = json.loads(PIDF.read_text())
+                    return P.get(kind)
+                except Exception:
+                    return None
+
+            def run_direct():
+                \"\"\"Start Flask by importing the factory directly (no CLI discovery).\"\"\"
+                code = (
+                    "from app.main import create_app\\n"
+                    "app = create_app()\\n"
+                    "app.run(host='127.0.0.1', port=5000, debug=True)\\n"
+                )
                 env = os.environ.copy()
-                env["FLASK_APP"] = "app.main:create_app"
-                env["FLASK_RUN_PORT"] = "5000"
-                env["FLASK_ENV"] = "development"
                 env["PYTHONUTF8"] = "1"
+                p = subprocess.Popen(
+                    [str(PY), "-c", code],
+                    cwd=str(ROOT / "backend"),
+                    env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                )
+                print(f"[start] Flask dev server (direct) starting pid={p.pid} → http://127.0.0.1:5000")
+                _record_pid("flask_pid", p.pid)
+                # print a few lines then detach
+                t_end = time.time() + 3
+                try:
+                    while time.time() < t_end:
+                        line = p.stdout.readline()
+                        if not line: break
+                        print(line.rstrip())
+                except Exception:
+                    pass
+
+            def run_cli():
+                \"\"\"Fallback to Flask CLI if direct import ever fails.\"\"\"
+                env = os.environ.copy()
+                env["PYTHONUTF8"] = "1"
+                env["FLASK_APP"] = "app.main:create_app"
                 p = subprocess.Popen(
                     [str(PY), "-m", "flask", "run", "--debug", "--host", "127.0.0.1", "--port", "5000"],
                     cwd=str(ROOT / "backend"),
                     env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
-                print(f"[start] Flask dev server starting (pid={{p.pid}}) at http://127.0.0.1:5000")
-                P = {{}}
-                if PIDF.exists():
-                    try: P = json.loads(PIDF.read_text())
-                    except Exception: P = {{}}
-                P["flask_pid"] = p.pid
-                PIDF.write_text(json.dumps(P), encoding="utf-8")
+                print(f"[start] Flask dev server (CLI) starting pid={p.pid} → http://127.0.0.1:5000")
+                _record_pid("flask_pid", p.pid)
                 t_end = time.time() + 3
                 try:
                     while time.time() < t_end:
@@ -204,20 +241,16 @@ def write_start_stop_scripts(root: Path) -> None:
                     pass
 
             if __name__ == "__main__":
+                running = _already_running("flask_pid")
+                if running:
+                    print(f"[start] Flask already appears to be running (pid={running}).")
+                    sys.exit(0)
                 try:
-                    P = json.loads((Path(".pids.json").read_text())) if PIDF.exists() else {{}}
-                    pid = P.get("flask_pid")
-                    if pid:
-                        if os.name == "nt":
-                            import ctypes
-                            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
-                            if handle:
-                                print(f"[start] Flask already appears to be running (pid={{pid}}).")
-                                sys.exit(0)
-                    run()
+                    # Prefer direct import (no discovery); fallback to CLI if it throws.
+                    run_direct()
                 except Exception as e:
-                    print(f"[start] WARN: {{e}}"); run()
+                    print(f"[start] direct import failed, falling back to CLI: {e}")
+                    run_cli()
         """), encoding="utf-8")
 
     if not stop_py.exists():
@@ -251,12 +284,12 @@ def write_start_stop_scripts(root: Path) -> None:
                     pid = P.get(key)
                     if pid and kill(pid):
                         print(f"[stop] killed {key} pid={pid}")
-                        P.pop(key, None)
-                        count += 1
+                        P.pop(key, None); count += 1
                 PIDF.write_text(json.dumps(P), encoding="utf-8")
                 if count == 0:
                     print("[stop] nothing to stop")
         """), encoding="utf-8")
+
 
 def maybe_start_now(root: Path) -> None:
     try:
