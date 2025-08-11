@@ -1,350 +1,236 @@
 #!/usr/bin/env python3
 """
-Python Environment Bootloader - Step 2
-Sets up Python virtual environment using uv
+Deploy Step 1: Folder Structure Creation
+First step in the ordered deployment process - just creates folders
 
-Order of Operations:
-1. [DONE] Create folder structure (Step 1)
-2. [THIS STEP] Install uv and create .venv
-3. [NEXT] Generate backend TOML
-4. [NEXT] Setup frontend (npm)
+This script is designed to be called by VelaOS after GitHub repository clone.
+It focuses solely on creating the project folder structure without any dependencies.
+
+Usage:
+    python deploy_step_1.py                 # Auto-deploy (VelaOS compatible)
+    python deploy_step_1.py --deploy        # Explicit deploy
+    python deploy_step_1.py --help-only     # Show help only
 """
+
+# IMMEDIATE DEBUG OUTPUT - before any imports that might fail
+print("[DEPLOY_STEP_1_FIXED] Script starting...")
+print(f"[DEPLOY_STEP_1_FIXED] Python version: {sys.version}")
+print(f"[DEPLOY_STEP_1_FIXED] Current directory: {os.getcwd()}")
+print(f"[DEPLOY_STEP_1_FIXED] Script file: {__file__}")
 
 import os
 import sys
-import json
+import subprocess
+from pathlib import Path
 import argparse
 import logging
-import subprocess
-import shutil
-from pathlib import Path
-from typing import Dict, Any
 from datetime import datetime
+
+print("[DEPLOY_STEP_1_FIXED] All imports successful")
+
 
 # Setup comprehensive logging
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('python_env_bootloader.log'),
+        logging.FileHandler('deployment.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
 
-class PythonEnvBootloader:
-    """Bootloader that sets up Python virtual environment using uv."""
+def check_local_files():
+    """Check that required files are present locally."""
+    print("Checking for local bootloader files...")
     
-    def __init__(self, config_path: str = None):
-        logger.info("=" * 60)
-        logger.info("PYTHON ENVIRONMENT BOOTLOADER - STEP 2")
-        logger.info("=" * 60)
-        logger.info(f"Initializing PythonEnvBootloader at {datetime.now()}")
-        logger.info(f"Python version: {sys.version}")
-        logger.info(f"Current working directory: {os.getcwd()}")
-        
-        self.config_path = config_path or "bootloader_config.json"
-        logger.info(f"Config path: {self.config_path}")
-        self.config = self._load_config()
-        
-        # Use VELA_CORE_DIR if available (VelaOS deployment), otherwise current directory
-        vela_target = os.environ.get("VELA_CORE_DIR")
-        if vela_target:
-            logger.info(f"VELA_CORE_DIR detected: {vela_target}")
-            # VELA_CORE_DIR points to deep internal directory like:
-            # C:\...\vela_install_20250810_193432\data\.vela\cores\1.0.0-e34b2e4c
-            # We want the deployment root: C:\...\vela_install_20250810_193432
-            core_path = Path(vela_target)
-            logger.info(f"Core path: {core_path}")
-            # Go up: cores -> .vela -> data -> deployment_root
-            deployment_root = core_path.parent.parent.parent
-            logger.info(f"Calculated deployment root: {deployment_root}")
-            self.project_root = deployment_root
-            logger.info(f"[VelaOS] Core directory: {core_path}")
-            logger.info(f"[VelaOS] Using deployment root: {self.project_root}")
+    required_files = ['folder_bootloader.py', 'python_env_bootloader.py', 'bootloader_config.json']
+    missing_files = []
+    
+    for filename in required_files:
+        if not Path(filename).exists():
+            missing_files.append(filename)
         else:
-            logger.info("VELA_CORE_DIR not set - using current directory as project root")
-            deployment_root = Path.cwd()
-            self.project_root = deployment_root
-            logger.info(f"[Local] Using current directory: {self.project_root}")
-            
-        self.app_name = self.config["application"]["name"]
-        logger.info(f"Application name: {self.app_name}")
+            print(f"[OK] Found {filename}")
     
-    def _load_config(self) -> Dict[str, Any]:
-        """Load bootloader configuration."""
-        try:
-            with open(self.config_path, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            self.logger.warning(f"Config file {self.config_path} not found, using defaults")
-            return self._default_config()
-        except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in config file: {e}")
-            return self._default_config()
+    if missing_files:
+        print(f"[ERROR] Missing files: {', '.join(missing_files)}")
+        print("These files should be in the same directory as deploy script")
+        return False
     
-    def _default_config(self) -> Dict[str, Any]:
-        """Default configuration."""
-        return {
-            "application": {
-                "name": "flask-vite-app",
-                "description": "Flask + Vite application"
-            },
-            "python": {
-                "version": ">=3.8",
-                "dependencies": [
-                    "flask>=2.0.0",
-                    "flask-cors>=4.0.0"
-                ]
-            }
-        }
-    
-    def check_uv_installed(self) -> bool:
-        """Check if uv is installed and accessible."""
-        logger.info("Checking if uv is installed...")
-        try:
-            result = subprocess.run(['uv', '--version'], 
-                                  capture_output=True, text=True, check=True)
-            logger.info(f"✅ uv is installed: {result.stdout.strip()}")
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.warning("❌ uv is not installed or not in PATH")
-            return False
-    
-    def install_uv(self) -> bool:
-        """Install uv using pip."""
-        try:
-            logger.info("Installing uv...")
-            subprocess.run([sys.executable, '-m', 'pip', 'install', 'uv'], 
-                          check=True, capture_output=True, text=True)
-            logger.info("✅ uv installed successfully")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"❌ Failed to install uv: {e}")
-            if e.stdout:
-                logger.error(f"STDOUT: {e.stdout}")
-            if e.stderr:
-                logger.error(f"STDERR: {e.stderr}")
-            return False
-    
-    def create_virtual_environment(self) -> bool:
-        """Create Python virtual environment using uv."""
-        venv_path = self.project_root / ".venv"
-        
-        if venv_path.exists():
-            self.logger.info(f"✅ Virtual environment already exists: {venv_path}")
-            return True
-        
-        try:
-            self.logger.info(f"Creating virtual environment at: {venv_path}")
-            
-            # Change to project root for uv venv creation
-            original_cwd = os.getcwd()
-            os.chdir(self.project_root)
-            
-            try:
-                # Create virtual environment with uv
-                result = subprocess.run(['uv', 'venv', '.venv'], 
-                                      capture_output=True, text=True, check=True)
-                self.logger.info("✅ Virtual environment created successfully")
-                if result.stdout:
-                    self.logger.info(f"uv output: {result.stdout.strip()}")
-                return True
-            finally:
-                os.chdir(original_cwd)
-                
-        except subprocess.CalledProcessError as e:
-            self.logger.error(f"❌ Failed to create virtual environment: {e}")
-            if e.stdout:
-                self.logger.error(f"STDOUT: {e.stdout}")
-            if e.stderr:
-                self.logger.error(f"STDERR: {e.stderr}")
-            return False
-    
-    def create_basic_python_files(self) -> bool:
-        """Create basic Python project files."""
-        files_to_create = [
-            # Basic Python files
-            ("backend/app/__init__.py", "# Flask application package\n"),
-            ("backend/app/main.py", '''#!/usr/bin/env python3
-"""
-Main Flask application entry point.
-"""
+    return True
 
-from flask import Flask
-from flask_cors import CORS
 
-def create_app():
-    """Create and configure Flask application."""
-    app = Flask(__name__)
-    CORS(app)
+def check_requirements():
+    """Check basic system requirements for folder creation."""
+    print("Checking system requirements...")
     
-    @app.route('/')
-    def hello():
-        return {"message": "Hello from Flask + Vite!"}
+    # Check Python version
+    if sys.version_info < (3, 8):
+        print("[ERROR] Python 3.8+ required")
+        return False
+    print("[OK] Python version OK")
     
-    @app.route('/api/health')
-    def health():
-        return {"status": "healthy", "service": "flask-backend"}
+    # Check write permissions
+    try:
+        test_dir = Path.cwd() / "test_write_permission"
+        test_dir.mkdir(exist_ok=True)
+        test_dir.rmdir()
+        print("[OK] Write permissions OK")
+    except PermissionError:
+        print("[ERROR] No write permissions in current directory")
+        return False
     
-    return app
-
-if __name__ == '__main__':
-    app = create_app()
-    app.run(debug=True, host='0.0.0.0', port=5000)
-'''),
-            
-            # Requirements placeholder (will be replaced by pyproject.toml)
-            ("requirements.txt", "# This file is managed by uv and pyproject.toml\n# Use 'uv sync' to install dependencies\n"),
-            
-            # Python gitignore additions
-            (".gitignore", '''# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-'''),
-        ]
-        
-        created_files = []
-        for file_path, content in files_to_create:
-            full_path = self.project_root / file_path
-            
-            # Only create if doesn't exist
-            if not full_path.exists():
-                full_path.parent.mkdir(parents=True, exist_ok=True)
-                full_path.write_text(content)
-                created_files.append(file_path)
-                self.logger.info(f"Created file: {file_path}")
-            else:
-                self.logger.info(f"File already exists: {file_path}")
-        
-        self.logger.info(f"Created {len(created_files)} Python files")
-        return True
-    
-    def deploy(self):
-        """Deploy - set up Python environment."""
-        self.logger.info("Starting Python environment setup...")
-        
-        try:
-            # Check if uv is installed
-            if not self.check_uv_installed():
-                self.logger.info("uv not found, attempting to install...")
-                if not self.install_uv():
-                    self.logger.error("❌ Failed to install uv - continuing without virtual environment")
-                    return False
-            
-            # Create virtual environment
-            if not self.create_virtual_environment():
-                self.logger.error("❌ Failed to create virtual environment")
-                return False
-            
-            # Create basic Python files
-            if not self.create_basic_python_files():
-                self.logger.error("❌ Failed to create Python files")
-                return False
-            
-            self.logger.info("✅ Python environment setup completed successfully!")
-            self.logger.info("🐍 Virtual environment is ready for development")
-            
-            # Show next steps
-            self._show_next_steps()
-            
-        except Exception as e:
-            self.logger.error(f"❌ Python environment setup failed: {e}")
-            raise
-    
-    def _show_next_steps(self):
-        """Show next steps for the user."""
-        venv_path = self.project_root / ".venv"
-        
-        self.logger.info("\n" + "="*60)
-        self.logger.info("🚀 PYTHON ENVIRONMENT READY")
-        self.logger.info("="*60)
-        self.logger.info(f"📁 Project root: {self.project_root}")
-        self.logger.info(f"🐍 Virtual environment: {venv_path}")
-        self.logger.info("\n📋 Next Steps:")
-        self.logger.info("   1. ✅ Folder structure created")
-        self.logger.info("   2. ✅ Python environment setup")
-        self.logger.info("   3. 🔄 Generate backend TOML (Step 3)")
-        self.logger.info("   4. 🔄 Setup frontend (Step 4)")
-        
-        # Activation instructions
-        if os.name == 'nt':
-            activate_cmd = f"{venv_path}\\Scripts\\activate"
-        else:
-            activate_cmd = f"source {venv_path}/bin/activate"
-            
-        self.logger.info(f"\n💡 To activate virtual environment:")
-        self.logger.info(f"   {activate_cmd}")
+    return True
 
 
 def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description="Python Environment Bootloader - Step 2")
-    parser.add_argument("--deploy", action="store_true", help="Set up Python environment")
-    parser.add_argument("--config", default="bootloader_config.json", help="Config file path")
+    """Main deployment entry point."""
+    logger.info("=" * 60)
+    logger.info("DEPLOY STEP 1+2: FOLDER STRUCTURE + PYTHON ENV")
+    logger.info("=" * 60)
+    logger.info(f"Starting deployment at {datetime.now()}")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Script path: {__file__}")
+    
+    # Log environment variables
+    vela_core_dir = os.environ.get("VELA_CORE_DIR")
+    if vela_core_dir:
+        logger.info(f"VELA_CORE_DIR detected: {vela_core_dir}")
+    else:
+        logger.info("VELA_CORE_DIR not set - running in local mode")
+    
+    # Check if we have the required files locally
+    logger.info("Checking for required bootloader files...")
+    if not check_local_files():
+        logger.error("Bootloader files not found in current directory.")
+        logger.error("This script expects to run in a repository with:")
+        logger.error("- folder_bootloader.py")
+        logger.error("- python_env_bootloader.py")
+        logger.error("- bootloader_config.json")
+        sys.exit(1)
+    
+    # Execute the folder bootloader directly (no downloads needed)
+    logger.info("Starting Step 1: Folder Structure Creation...")
+    logger.info(f"Executing command: {sys.executable} folder_bootloader.py --deploy")
+    try:
+        result = subprocess.run([sys.executable, 'folder_bootloader.py', '--deploy'], 
+                              check=True, capture_output=True, text=True)
+        
+        logger.info("Step 1 subprocess completed successfully")
+        # Show the output from folder bootloader
+        if result.stdout:
+            logger.info("Step 1 STDOUT:")
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.info(f"  {line}")
+        
+        if result.stderr:
+            logger.warning("Step 1 STDERR:")
+            for line in result.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.warning(f"  {line}")
+        
+        logger.info("[SUCCESS] Step 1: Folder structure created successfully!")
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[ERROR] Step 1 failed with exit code {e.returncode}")
+        if e.stdout:
+            logger.error("Step 1 STDOUT:")
+            for line in e.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
+        if e.stderr:
+            logger.error("Step 1 STDERR:")
+            for line in e.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.error("Step 1 interrupted by user")
+        sys.exit(1)
+    
+    # Step 2: Python Environment Setup
+    logger.info("Starting Step 2: Python Environment Setup...")
+    logger.info(f"Executing command: {sys.executable} python_env_bootloader.py --deploy")
+    try:
+        result = subprocess.run([sys.executable, 'python_env_bootloader.py', '--deploy'], 
+                              check=True, capture_output=True, text=True)
+        
+        logger.info("Step 2 subprocess completed successfully")
+        # Show the output from python env bootloader
+        if result.stdout:
+            logger.info("Step 2 STDOUT:")
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.info(f"  {line}")
+        
+        if result.stderr:
+            logger.warning("Step 2 STDERR:")
+            for line in result.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.warning(f"  {line}")
+        
+        logger.info("[SUCCESS] Step 2: Python environment setup completed!")
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[ERROR] Step 2 failed with exit code {e.returncode}")
+        if e.stdout:
+            logger.error("Step 2 STDOUT:")
+            for line in e.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
+        if e.stderr:
+            logger.error("Step 2 STDERR:")
+            for line in e.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
+        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
+        logger.error("[FAILED] Step 2 failed - check logs above")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.error("Step 2 interrupted by user")
+        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
+        sys.exit(1)
+    
+    # Final success message
+    print("\n" + "="*60)
+    print("DEPLOYMENT SUCCESSFUL!")
+    print("="*60)
+    print("Step 1: Folder structure created")
+    print("Step 2: Python environment setup")
+    print("\nYour Flask + Vite project is ready for development!")
+    
+    print("\nWhat was created:")
+    print("- Project folder structure (backend/, frontend/, tests/, etc.)")
+    print("- Python virtual environment (.venv)")
+    print("- Basic Flask application files")
+    print("- Comprehensive .gitignore")
+    
+    print("\nNext steps:")
+    print("- Activate virtual environment")
+    print("- Install additional dependencies as needed")
+    print("- Start developing your Flask + Vite application")
+
+
+if __name__ == '__main__':
+    # Parse arguments - but default to deploy=True for VelaOS compatibility
+    parser = argparse.ArgumentParser(description="Deploy Step 1: Folder Structure Creation")
+    parser.add_argument("--deploy", action="store_true", help="Execute folder structure creation")
+    parser.add_argument("--help-only", action="store_true", help="Show help only (don't auto-deploy)")
     
     args = parser.parse_args()
     
-    bootloader = PythonEnvBootloader(config_path=args.config)
-    
-    if args.deploy:
-        bootloader.deploy()
+    # Auto-deploy unless explicitly asked for help only
+    if args.help_only:
+        print("Deploy Step 1 - Use --deploy to create folder structure")
+        print("\nThis is the first step in the ordered deployment process:")
+        print("1. [THIS STEP] Create folder structure")
+        print("2. Setup Python environment (uv, .venv)")
+        print("3. Generate backend TOML")
+        print("4. Setup frontend (npm)")
     else:
-        print("Python Environment Bootloader - Step 2")
-        print("Use --deploy to set up Python environment")
-        print("\nThis step will:")
-        print("- Install uv (if not present)")
-        print("- Create Python virtual environment (.venv)")
-        print("- Create basic Python project files")
-
-
-if __name__ == "__main__":
-    main()
+        # Default behavior: auto-deploy (VelaOS compatibility)
+        main()
