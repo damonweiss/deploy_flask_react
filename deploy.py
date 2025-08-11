@@ -12,6 +12,12 @@ Usage:
     python deploy_step_1.py --help-only     # Show help only
 """
 
+# IMMEDIATE DEBUG OUTPUT - before any imports that might fail
+print("[DEPLOY_STEP_1_FIXED] Script starting...")
+print(f"[DEPLOY_STEP_1_FIXED] Python version: {sys.version}")
+print(f"[DEPLOY_STEP_1_FIXED] Current directory: {os.getcwd()}")
+print(f"[DEPLOY_STEP_1_FIXED] Script file: {__file__}")
+
 import os
 import sys
 import subprocess
@@ -19,6 +25,8 @@ from pathlib import Path
 import argparse
 import logging
 from datetime import datetime
+
+print("[DEPLOY_STEP_1_FIXED] All imports successful")
 
 
 # Setup comprehensive logging
@@ -189,19 +197,19 @@ def main():
     
     # Final success message
     print("\n" + "="*60)
-    print("🎉 DEPLOYMENT SUCCESSFUL!")
+    print("DEPLOYMENT SUCCESSFUL!")
     print("="*60)
-    print("✅ Step 1: Folder structure created")
-    print("✅ Step 2: Python environment setup")
-    print("\n🚀 Your Flask + Vite project is ready for development!")
+    print("Step 1: Folder structure created")
+    print("Step 2: Python environment setup")
+    print("\nYour Flask + Vite project is ready for development!")
     
-    print("\n📋 What was created:")
+    print("\nWhat was created:")
     print("- Project folder structure (backend/, frontend/, tests/, etc.)")
     print("- Python virtual environment (.venv)")
     print("- Basic Flask application files")
     print("- Comprehensive .gitignore")
     
-    print("\n💡 Next steps:")
+    print("\nNext steps:")
     print("- Activate virtual environment")
     print("- Install additional dependencies as needed")
     print("- Start developing your Flask + Vite application")
