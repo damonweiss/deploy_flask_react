@@ -134,10 +134,12 @@ def main() -> int:
 
     try:
         if not reqs_path.exists():
-            if args.strict_reqs:
-                print(f"[STEP2] --strict-reqs set and requirements file missing: {reqs_path}")
-                return 2
-            write_requirements(backend, reqs_path, strict=args.strict_reqs)
+            # Only fail strict if user provided a non-default path explicitly
+            default_req = (args.requirements == "backend/requirements.txt")
+            if args.strict_reqs and not default_req:
+             print(f"[STEP2] --strict-reqs set and requirements file missing: {reqs_path}")
+             return 2
+         write_requirements(backend, reqs_path, strict=args.strict_reqs)
 
         venv_path, python_exe = create_venv(venv_dir)
         if args.verbose:
