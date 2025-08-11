@@ -16,6 +16,11 @@ import logging
 from pathlib import Path
 from typing import Dict, Any
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 class FolderBootloader:
     """Simple bootloader that just creates folder structure."""
@@ -193,27 +198,28 @@ class FolderBootloader:
             raise
     
     def _show_structure(self):
-        """Show the created project structure."""
-        self.logger.info("\nProject Structure Created:")
-        self.logger.info("├── backend/")
-        self.logger.info("│   └── app/")
-        self.logger.info("│       ├── routes/")
-        self.logger.info("│       ├── models/")
-        self.logger.info("│       └── utils/")
-        self.logger.info("├── frontend/")
-        self.logger.info("│   ├── src/")
-        self.logger.info("│   │   ├── components/")
-        self.logger.info("│   │   ├── pages/")
-        self.logger.info("│   │   ├── hooks/")
-        self.logger.info("│   │   └── utils/")
-        self.logger.info("│   └── public/")
-        self.logger.info("├── tests/")
-        self.logger.info("│   ├── backend/")
-        self.logger.info("│   └── frontend/")
-        self.logger.info("├── docs/")
-        self.logger.info("├── scripts/")
-        self.logger.info("├── config/")
-        self.logger.info("└── logs/")
+        self.logger.info("")
+        self.logger.info("Project Structure Created:")
+        self.logger.info("|-- backend/")
+        self.logger.info("|   `-- app/")
+        self.logger.info("|       |-- routes/")
+        self.logger.info("|       |-- models/")
+        self.logger.info("|       `-- utils/")
+        self.logger.info("|-- frontend/")
+        self.logger.info("|   |-- src/")
+        self.logger.info("|   |   |-- components/")
+        self.logger.info("|   |   |-- pages/")
+        self.logger.info("|   |   |-- hooks/")
+        self.logger.info("|   |   `-- utils/")
+        self.logger.info("|   `-- public/")
+        self.logger.info("|-- tests/")
+        self.logger.info("|   |-- backend/")
+        self.logger.info("|   `-- frontend/")
+        self.logger.info("|-- docs/")
+        self.logger.info("|-- scripts/")
+        self.logger.info("|-- config/")
+        self.logger.info("`-- logs/")
+
 
 
 def main():
