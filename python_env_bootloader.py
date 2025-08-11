@@ -3,12 +3,10 @@
 Python Env Bootloader (STEP 2) — NO-OP STUB
 Always exits 0. Accepts any flags. Prints a brief success message.
 """
-
 from __future__ import annotations
 import sys, os, argparse
 
 def main() -> int:
-    # Accept/ignore any flags so callers don't break
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--deploy", action="store_true")
     ap.add_argument("--verbose", action="store_true")
@@ -16,8 +14,7 @@ def main() -> int:
     ap.add_argument("--requirements")
     ap.add_argument("--strict-reqs", action="store_true")
     ap.add_argument("--config")
-    _, _unknown = ap.parse_known_args()
-
+    _, _ = ap.parse_known_args()
     print(f"[STEP2-STUB] pid={os.getpid()} cwd={os.getcwd()}", flush=True)
     print("[STEP2-STUB] Python Env Bootloader: NO-OP (success)", flush=True)
     return 0
