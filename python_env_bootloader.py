@@ -127,6 +127,7 @@ def main() -> int:
     return 0
 
 if __name__ == "__main__":
+    log.info("Trying...")
     try:
         sys.exit(main())
     except KeyboardInterrupt:
