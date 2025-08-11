@@ -160,7 +160,10 @@ def main(skip_env: bool, verbose: bool) -> None:
     if not skip_env:
         if step2_present:
             try:
-                run_step("Step 2: Python Environment Setup", [sys.executable, "python_env_bootloader.py", "--deploy"])
+              run_step(
+                  "Step 2: Python Environment Setup",
+                  [sys.executable, str(REPO_ROOT / "python_env_bootloader.py"), "--deploy", "--verbose"]
+              )
             except Exception:
                 print("\n[FAILED] Step 2 failed. Step 1 completed successfully. See deployment.log")
                 sys.exit(1)
