@@ -2,11 +2,11 @@
 """
 Python Env Bootloader (STEP 2)
 - Resolves deployment root from VELA_CORE_DIR (or cwd)
-- Ensures backend/ exists with a minimal Flask app
+- Ensures backend/ with a minimal Flask app (health endpoint)
 - Creates backend/.venv (or given --venv-dir)
-- Writes backend/requirements.txt (if missing) with Flask
-- Installs requirements via uv (preferred) or pip (bootstraps pip if missing)
-- Writes start_server.py and stop_servers.py at deployment root (Flask-only)
+- Writes backend/requirements.txt (Flask + runtime deps) if missing
+- Installs requirements via uv (preferred) or pip; verifies imports
+- Writes start_server.py and stop_servers.py at deployment root
 - Optionally starts Flask immediately (--start-now)
 """
 
@@ -35,11 +35,14 @@ def resolve_deployment_root() -> Path:
 
 def ensure_backend(root: Path) -> Path:
     backend = root / "backend"
-    (backend / "app").mkdir(parents=True, exist_ok=True)
-    init_py = backend / "app" / "__init__.py"
-    main_py = backend / "app" / "main.py"
+    app_dir = backend / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+
+    init_py = app_dir / "__init__.py"
     if not init_py.exists():
-        init_py.write_text("# Flask app init\n", encoding="utf-8")
+        init_py.write_text("# Flask app package\n", encoding="utf-8")
+
+    main_py = app_dir / "main.py"
     if not main_py.exists():
         main_py.write_text(
             textwrap.dedent(
@@ -65,10 +68,22 @@ def ensure_backend(root: Path) -> Path:
     return backend
 
 def write_requirements(requirements_path: Path) -> None:
+    """
+    Write explicit Flask runtime deps to avoid partial installs.
+    Flask normally pulls these transitively, but we list them to be bulletproof,
+    and to work well with uv pip sync.
+    """
     if requirements_path.exists():
         return
     requirements_path.parent.mkdir(parents=True, exist_ok=True)
-    requirements_path.write_text("Flask>=3.0,<4\n", encoding="utf-8")
+    lines = [
+        "Flask>=3.0,<4",
+        "Werkzeug>=3.0,<4",
+        "Click>=8.1,<9",
+        "itsdangerous>=2.1,<3",
+        "Jinja2>=3.1,<4",
+    ]
+    requirements_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 def create_venv(venv_dir: Path) -> tuple[Path, str]:
     venv_dir.mkdir(parents=True, exist_ok=True)
@@ -104,7 +119,6 @@ def ensure_pip(python_exe: str) -> None:
         raise SystemError("pip is unavailable in the virtual environment")
 
 def install_requirements(python_exe: str, requirements_path: Path) -> None:
-    # If a requirements file is present, use it; else ensure Flask explicitly.
     uv = shutil.which("uv")
     if requirements_path.exists():
         if uv:
@@ -115,33 +129,40 @@ def install_requirements(python_exe: str, requirements_path: Path) -> None:
             sys.stdout.write(res.stdout or "")
             if res.returncode != 0:
                 sys.stderr.write(res.stderr or ""); raise SystemError("uv pip sync failed")
-            return
-        res = subprocess.run(
-            [python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
-            capture_output=True, text=True, cwd=str(requirements_path.parent)
-        )
-        sys.stdout.write(res.stdout or "")
-        if res.returncode != 0:
-            sys.stderr.write(res.stderr or ""); raise SystemError("pip install failed")
-        return
+        else:
+            res = subprocess.run(
+                [python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
+                capture_output=True, text=True, cwd=str(requirements_path.parent)
+            )
+            sys.stdout.write(res.stdout or "")
+            if res.returncode != 0:
+                sys.stderr.write(res.stderr or ""); raise SystemError("pip install failed")
+    else:
+        # Extremely defensive fallback
+        pkgs = ["Flask>=3.0,<4", "Werkzeug>=3.0,<4", "Click>=8.1,<9", "itsdangerous>=2.1,<3", "Jinja2>=3.1,<4"]
+        if uv:
+            res = subprocess.run([uv, "pip", "install", *pkgs], capture_output=True, text=True)
+            sys.stdout.write(res.stdout or "")
+            if res.returncode != 0:
+                sys.stderr.write(res.stderr or ""); raise SystemError("uv pip install failed")
+        else:
+            res = subprocess.run([python_exe, "-m", "pip", "install", *pkgs], capture_output=True, text=True)
+            sys.stdout.write(res.stdout or "")
+            if res.returncode != 0:
+                sys.stderr.write(res.stderr or ""); raise SystemError("pip install failed")
 
-    # No file → install Flask explicitly
-    if uv:
-        res = subprocess.run([uv, "pip", "install", "Flask>=3.0,<4"], capture_output=True, text=True)
-        sys.stdout.write(res.stdout or "")
-        if res.returncode != 0:
-            sys.stderr.write(res.stderr or ""); raise SystemError("uv pip install Flask failed")
-        return
-    res = subprocess.run([python_exe, "-m", "pip", "install", "Flask>=3.0,<4"], capture_output=True, text=True)
-    sys.stdout.write(res.stdout or "")
+def verify_runtime(python_exe: str) -> None:
+    """Verify that flask and werkzeug import cleanly inside the venv."""
+    code = "import flask, werkzeug; print(flask.__version__); print(werkzeug.__version__)"
+    res = subprocess.run([python_exe, "-c", code], capture_output=True, text=True)
     if res.returncode != 0:
-        sys.stderr.write(res.stderr or ""); raise SystemError("pip install Flask failed")
+        sys.stderr.write(res.stderr or "")
+        raise SystemError("Flask/Werkzeug failed to import after install")
+    sys.stdout.write("[STEP2] Verified Flask/Werkzeug import\n")
 
 def _pid_alive(pid: int) -> bool:
     try:
         if os.name == "nt":
-            # On Windows, os.kill with 0 is available since 3.2 but doesn't signal;
-            # use tasklist to check existence.
             out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
             return str(pid) in out.stdout
         else:
@@ -344,6 +365,8 @@ def main() -> int:
             print(f"[STEP2] requirements={reqs_path}")
 
         install_requirements(python_exe, reqs_path)
+        verify_runtime(python_exe)
+
         write_backend_run_script(backend, venv_path)
         write_control_scripts(root, backend)
 
@@ -351,7 +374,7 @@ def main() -> int:
             subprocess.run([sys.executable, str(root / "start_server.py")], check=False)
 
         print(f"[STEP2] Backend venv ready: {venv_path}")
-        print(f"[STEP2] Requirements installed from: {reqs_path if reqs_path.exists() else 'Flask (explicit)'}")
+        print(f"[STEP2] Requirements installed from: {reqs_path if reqs_path.exists() else 'explicit list'}")
         print("[STEP2] Python Env Bootloader: SUCCESS")
         return 0
 
