@@ -24,7 +24,7 @@ def check_local_files():
     """Check that required files are present locally."""
     print("Checking for local bootloader files...")
     
-    required_files = ['folder_bootloader.py', 'python_env_bootloader.py', 'bootloader_config.json']
+    required_files = ['folder_bootloader.py', 'bootloader_config.json']
     missing_files = []
     
     for filename in required_files:
@@ -35,7 +35,7 @@ def check_local_files():
     
     if missing_files:
         print(f"[ERROR] Missing files: {', '.join(missing_files)}")
-        print("These files should be in the same directory as deploy script")
+        print("These files should be in the same directory as deploy_step_1.py")
         return False
     
     return True
@@ -80,7 +80,6 @@ def main():
         print("\nBootloader files not found in current directory.")
         print("This script expects to run in a repository with:")
         print("- folder_bootloader.py")
-        print("- python_env_bootloader.py")
         print("- bootloader_config.json")
         sys.exit(1)
     
@@ -95,6 +94,10 @@ def main():
             print(result.stdout)
         
         print("\n[SUCCESS] Step 1: Folder structure created successfully!")
+        print("\nNext Steps:")
+        print("- Step 2: Python environment setup (uv, .venv)")
+        print("- Step 3: Backend TOML generation")
+        print("- Step 4: Frontend setup (npm)")
         
     except subprocess.CalledProcessError as e:
         print(f"\n[ERROR] Step 1 failed: {e}")
@@ -105,52 +108,7 @@ def main():
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nStep 1 interrupted by user")
-        sys.exit(1)
-    
-    # Step 2: Python Environment Setup
-    print("\nStarting Step 2: Python Environment Setup...")
-    try:
-        result = subprocess.run([sys.executable, 'python_env_bootloader.py', '--deploy'], 
-                              check=True, capture_output=True, text=True)
-        
-        # Show the output from python env bootloader
-        if result.stdout:
-            print(result.stdout)
-        
-        print("\n[SUCCESS] Step 2: Python environment setup completed!")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"\n[ERROR] Step 2 failed: {e}")
-        if e.stdout:
-            print("STDOUT:", e.stdout)
-        if e.stderr:
-            print("STDERR:", e.stderr)
-        print("\n[PARTIAL SUCCESS] Step 1 completed successfully")
-        print("[FAILED] Step 2 failed - check logs above")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("\nStep 2 interrupted by user")
-        print("\n[PARTIAL SUCCESS] Step 1 completed successfully")
-        sys.exit(1)
-    
-    # Final success message
-    print("\n" + "="*60)
-    print("🎉 DEPLOYMENT SUCCESSFUL!")
-    print("="*60)
-    print("✅ Step 1: Folder structure created")
-    print("✅ Step 2: Python environment setup")
-    print("\n🚀 Your Flask + Vite project is ready for development!")
-    
-    print("\n📋 What was created:")
-    print("- Project folder structure (backend/, frontend/, tests/, etc.)")
-    print("- Python virtual environment (.venv)")
-    print("- Basic Flask application files")
-    print("- Comprehensive .gitignore")
-    
-    print("\n💡 Next steps:")
-    print("- Activate virtual environment")
-    print("- Install additional dependencies as needed")
-    print("- Start developing your Flask + Vite application")
+        sys.exit(0)
 
 
 if __name__ == '__main__':
