@@ -63,11 +63,42 @@ BASE_REQS = [
     "MarkupSafe>=2.1,<3",
 ]
 
-def write_requirements(path: Path) -> None:
-    if path.exists():
+def write_requirements(requirements_path: Path) -> None:
+    if requirements_path.exists():
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(BASE_REQS) + "\n", encoding="utf-8")
+    requirements_path.parent.mkdir(parents=True, exist_ok=True)
+    reqs = [
+        "flask>=3.0,<4",
+        "blinker>=1.7,<2",
+        "werkzeug>=3.0,<4",
+        "Jinja2>=3.1,<4",
+        "itsdangerous>=2.2,<3",
+        "click>=8.1,<9",
+        # "python-dotenv>=1.0,<2",  # optional
+    ]
+    requirements_path.write_text("\n".join(reqs) + "\n", encoding="utf-8")
+
+def ensure_minimum_stack(requirements_path: Path) -> None:
+    needed = {
+        "blinker": "blinker>=1.7,<2",
+        "werkzeug": "werkzeug>=3.0,<4",
+        "jinja2": "Jinja2>=3.1,<4",
+        "itsdangerous": "itsdangerous>=2.2,<3",
+        "click": "click>=8.1,<9",
+    }
+    try:
+        lines = requirements_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    have = {line.strip().split("==")[0].split(">=")[0].lower() for line in lines if line.strip() and not line.strip().startswith("#")}
+    changed = False
+    for k, v in needed.items():
+        if k not in have:
+            lines.append(v)
+            changed = True
+    if changed:
+        requirements_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
 
 def _detect_python_for_version(version: str) -> str | None:
     """
@@ -274,6 +305,23 @@ def write_backend_run_script(backend: Path, venv: Path) -> None:
         )
         run_sh.chmod(0o755)
 
+def verify_stack(python_exe: str) -> None:
+    code = (
+        "mods=['flask','werkzeug','jinja2','click','itsdangerous','blinker'];"
+        "missing=[]\n"
+        "import importlib\n"
+        "for m in mods:\n"
+        "    try: importlib.import_module(m)\n"
+        "    except Exception as e: missing.append((m,str(e)))\n"
+        "import sys\n"
+        "print('OK' if not missing else 'MISSING:'+str(missing))"
+    )
+    res = subprocess.run([python_exe, "-c", code], capture_output=True, text=True)
+    out = (res.stdout or '').strip()
+    if not out.startswith("OK"):
+        raise SystemError(f"Flask stack failed to import: {out}")
+
+
 def write_control_scripts(root: Path, backend: Path) -> None:
     run_dir = root / ".vela-run"; run_dir.mkdir(exist_ok=True)
     pid_file = run_dir / "flask.pid"
@@ -408,6 +456,9 @@ def main() -> int:
                 print(f"[STEP2] --strict-reqs set and requirements file missing: {reqs_path}")
                 return 2
             write_requirements(reqs_path)
+        else:
+            ensure_minimum_stack(reqs_path)
+
 
         venv_path, py = create_venv(venv_dir, args.python)
         ensure_pip(py)
@@ -418,6 +469,7 @@ def main() -> int:
             print(f"[STEP2] requirements={reqs_path}")
 
         install_requirements(py, reqs_path)
+        verify_stack(python_exe)
         verify_runtime(py, allow_build=args.allow_build)
 
         write_backend_run_script(backend, venv_path)
