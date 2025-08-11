@@ -2,7 +2,7 @@
 """
 Python Env Bootloader (STEP 2)
 - Ensures backend with a minimal Flask app (/api/health)
-- Creates backend/.venv
+- Creates backend/.venv using a target Python (default 3.12)
 - Writes backend/requirements.txt (Flask + deps incl. MarkupSafe)
 - Installs via uv or pip
 - Verifies imports; remediates MarkupSafe on Win/Py3.13
@@ -60,7 +60,7 @@ BASE_REQS = [
     "Click>=8.1,<9",
     "itsdangerous>=2.1,<3",
     "Jinja2>=3.1,<4",
-    "MarkupSafe>=2.1,<3",  # explicitly include; needed by Jinja2
+    "MarkupSafe>=2.1,<3",
 ]
 
 def write_requirements(path: Path) -> None:
@@ -69,23 +69,102 @@ def write_requirements(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(BASE_REQS) + "\n", encoding="utf-8")
 
-def create_venv(venv_dir: Path) -> tuple[Path, str]:
+def _detect_python_for_version(version: str) -> str | None:
+    """
+    Try to find an interpreter for the requested major.minor.
+    - Windows: use 'py -X.Y'
+    - POSIX: try 'pythonX.Y' on PATH
+    - If 'version' looks like a path, use it directly.
+    """
+    if not version:
+        return None
+    # Explicit path?
+    v = version.strip().strip('"').strip("'")
+    if os.path.sep in v or (os.name == "nt" and ":" in v):
+        return v  # treat as path
+    if os.name == "nt":
+        # We'll drive the 'py' launcher via create_venv; return sentinel
+        return f"py:{v}"
+    return shutil.which(f"python{v}") or shutil.which("python3")  # best effort
+
+def _python_version_str(py: str) -> str:
+    r = subprocess.run([py, "-c", "import sys;print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+                       capture_output=True, text=True)
+    return (r.stdout or "").strip() if r.returncode == 0 else "unknown"
+
+def create_venv(venv_dir: Path, desired_python: str | None) -> tuple[Path, str]:
+    """
+    Create venv with target Python when possible.
+    - If uv is available, use: uv venv --python <ver|path> venv_dir
+    - Else:
+      * Windows: if desired 'py:X.Y', call: py -X.Y -m venv venv_dir
+      * POSIX:   if we found an interpreter path, call: <path> -m venv venv_dir
+      * Fallback: sys.executable -m venv venv_dir
+    """
     venv_dir.mkdir(parents=True, exist_ok=True)
     uv = shutil.which("uv")
+
+    # Resolve desired interpreter hint
+    py_hint = _detect_python_for_version(desired_python) if desired_python else None
+
     if uv:
-        r = subprocess.run([uv, "venv", str(venv_dir)], capture_output=True, text=True)
+        cmd = ["uv", "venv"]
+        if desired_python:
+            cmd += ["--python", desired_python]
+        cmd += [str(venv_dir)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
             raise SystemError("uv venv failed")
-        py = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        return venv_dir, str(py)
+    else:
+        if os.name == "nt" and isinstance(py_hint, str) and py_hint.startswith("py:"):
+            ver = py_hint.split(":", 1)[1]
+            r = subprocess.run(["py", f"-{ver}", "-m", "venv", str(venv_dir)],
+                               capture_output=True, text=True)
+            if r.returncode:
+                sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
+                # Fallback to current interpreter
+                r2 = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                                    capture_output=True, text=True)
+                if r2.returncode:
+                    sys.stdout.write(r2.stdout or ""); sys.stderr.write(r2.stderr or "")
+                    raise SystemError("venv creation failed")
+        elif py_hint and os.path.exists(py_hint):
+            r = subprocess.run([py_hint, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
+            if r.returncode:
+                sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
+                # Fallback
+                r2 = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                                    capture_output=True, text=True)
+                if r2.returncode:
+                    sys.stdout.write(r2.stdout or ""); sys.stderr.write(r2.stderr or "")
+                    raise SystemError("venv creation failed")
+        elif py_hint:
+            # e.g. 'python3.12' found on PATH
+            r = subprocess.run([py_hint, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
+            if r.returncode:
+                sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
+                # Fallback
+                r2 = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                                    capture_output=True, text=True)
+                if r2.returncode:
+                    sys.stdout.write(r2.stdout or ""); sys.stderr.write(r2.stderr or "")
+                    raise SystemError("venv creation failed")
+        else:
+            r = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)],
+                               capture_output=True, text=True)
+            if r.returncode:
+                sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
+                raise SystemError("venv creation failed")
 
-    r = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
-    if r.returncode:
-        sys.stdout.write(r.stdout or ""); sys.stderr.write(r.stderr or "")
-        raise SystemError("venv creation failed")
-    py = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    return venv_dir, str(py)
+    python_exe = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+    # Report the interpreter actually inside the venv
+    try:
+        actual = _python_version_str(python_exe)
+        print(f"[STEP2] venv python={actual} (requested={desired_python or 'current'})")
+    except Exception:
+        pass
+    return venv_dir, python_exe
 
 def ensure_pip(py: str) -> None:
     chk = subprocess.run([py, "-m", "pip", "--version"], capture_output=True, text=True)
@@ -144,7 +223,7 @@ def verify_runtime(py: str, allow_build: bool) -> None:
         except Exception:
             pass
 
-        # 2) Try pre-release wheel (often appears first for new Python minors)
+        # 2) Try pre-release wheel
         try:
             _pip(py, ["install", "--pre", "--only-binary=:all:", "MarkupSafe>=2.1,<3"])
             r3 = subprocess.run([py, "-c", code], capture_output=True, text=True)
@@ -300,6 +379,11 @@ def main() -> int:
     ap.add_argument("--start-now", action="store_true")
     ap.add_argument("--allow-build", action="store_true",
                     help="Allow building MarkupSafe from source if no wheels (requires C build tools)")
+    ap.add_argument(
+        "--python",
+        default=os.environ.get("VELA_PYTHON", "3.13"),
+        help="Target Python for the venv (major.minor, a path, or leave default 3.12)."
+    )
     args, _ = ap.parse_known_args()
 
     root = resolve_deployment_root()
@@ -325,7 +409,7 @@ def main() -> int:
                 return 2
             write_requirements(reqs_path)
 
-        venv_path, py = create_venv(venv_dir)
+        venv_path, py = create_venv(venv_dir, args.python)
         ensure_pip(py)
 
         if args.verbose:
