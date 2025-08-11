@@ -18,6 +18,19 @@ import subprocess
 from pathlib import Path
 import argparse
 import logging
+from datetime import datetime
+
+
+# Setup comprehensive logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('deployment.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 def check_local_files():
@@ -65,72 +78,113 @@ def check_requirements():
 
 
 def main():
-    """Main deployment entry point for Step 1."""
-    print("=" * 60)
-    print("DEPLOY STEP 1: FOLDER STRUCTURE CREATION")
-    print("=" * 60)
+    """Main deployment entry point."""
+    logger.info("=" * 60)
+    logger.info("DEPLOY STEP 1+2: FOLDER STRUCTURE + PYTHON ENV")
+    logger.info("=" * 60)
+    logger.info(f"Starting deployment at {datetime.now()}")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Script path: {__file__}")
     
-    # Check system requirements
-    if not check_requirements():
-        print("\nSystem requirements not met.")
-        sys.exit(1)
+    # Log environment variables
+    vela_core_dir = os.environ.get("VELA_CORE_DIR")
+    if vela_core_dir:
+        logger.info(f"VELA_CORE_DIR detected: {vela_core_dir}")
+    else:
+        logger.info("VELA_CORE_DIR not set - running in local mode")
     
-    # Check for local bootloader files (should be cloned by VelaOS)
+    # Check if we have the required files locally
+    logger.info("Checking for required bootloader files...")
     if not check_local_files():
-        print("\nBootloader files not found in current directory.")
-        print("This script expects to run in a repository with:")
-        print("- folder_bootloader.py")
-        print("- python_env_bootloader.py")
-        print("- bootloader_config.json")
+        logger.error("Bootloader files not found in current directory.")
+        logger.error("This script expects to run in a repository with:")
+        logger.error("- folder_bootloader.py")
+        logger.error("- python_env_bootloader.py")
+        logger.error("- bootloader_config.json")
         sys.exit(1)
     
     # Execute the folder bootloader directly (no downloads needed)
-    print("\nStarting Step 1: Folder Structure Creation...")
+    logger.info("Starting Step 1: Folder Structure Creation...")
+    logger.info(f"Executing command: {sys.executable} folder_bootloader.py --deploy")
     try:
         result = subprocess.run([sys.executable, 'folder_bootloader.py', '--deploy'], 
                               check=True, capture_output=True, text=True)
         
+        logger.info("Step 1 subprocess completed successfully")
         # Show the output from folder bootloader
         if result.stdout:
-            print(result.stdout)
+            logger.info("Step 1 STDOUT:")
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.info(f"  {line}")
         
-        print("\n[SUCCESS] Step 1: Folder structure created successfully!")
+        if result.stderr:
+            logger.warning("Step 1 STDERR:")
+            for line in result.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.warning(f"  {line}")
+        
+        logger.info("[SUCCESS] Step 1: Folder structure created successfully!")
         
     except subprocess.CalledProcessError as e:
-        print(f"\n[ERROR] Step 1 failed: {e}")
+        logger.error(f"[ERROR] Step 1 failed with exit code {e.returncode}")
         if e.stdout:
-            print("STDOUT:", e.stdout)
+            logger.error("Step 1 STDOUT:")
+            for line in e.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
         if e.stderr:
-            print("STDERR:", e.stderr)
+            logger.error("Step 1 STDERR:")
+            for line in e.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nStep 1 interrupted by user")
+        logger.error("Step 1 interrupted by user")
         sys.exit(1)
     
     # Step 2: Python Environment Setup
-    print("\nStarting Step 2: Python Environment Setup...")
+    logger.info("Starting Step 2: Python Environment Setup...")
+    logger.info(f"Executing command: {sys.executable} python_env_bootloader.py --deploy")
     try:
         result = subprocess.run([sys.executable, 'python_env_bootloader.py', '--deploy'], 
                               check=True, capture_output=True, text=True)
         
+        logger.info("Step 2 subprocess completed successfully")
         # Show the output from python env bootloader
         if result.stdout:
-            print(result.stdout)
+            logger.info("Step 2 STDOUT:")
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.info(f"  {line}")
         
-        print("\n[SUCCESS] Step 2: Python environment setup completed!")
+        if result.stderr:
+            logger.warning("Step 2 STDERR:")
+            for line in result.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.warning(f"  {line}")
+        
+        logger.info("[SUCCESS] Step 2: Python environment setup completed!")
         
     except subprocess.CalledProcessError as e:
-        print(f"\n[ERROR] Step 2 failed: {e}")
+        logger.error(f"[ERROR] Step 2 failed with exit code {e.returncode}")
         if e.stdout:
-            print("STDOUT:", e.stdout)
+            logger.error("Step 2 STDOUT:")
+            for line in e.stdout.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
         if e.stderr:
-            print("STDERR:", e.stderr)
-        print("\n[PARTIAL SUCCESS] Step 1 completed successfully")
-        print("[FAILED] Step 2 failed - check logs above")
+            logger.error("Step 2 STDERR:")
+            for line in e.stderr.strip().split('\n'):
+                if line.strip():
+                    logger.error(f"  {line}")
+        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
+        logger.error("[FAILED] Step 2 failed - check logs above")
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nStep 2 interrupted by user")
-        print("\n[PARTIAL SUCCESS] Step 1 completed successfully")
+        logger.error("Step 2 interrupted by user")
+        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
         sys.exit(1)
     
     # Final success message
