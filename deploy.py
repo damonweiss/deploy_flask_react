@@ -108,24 +108,30 @@ def run_step_1() -> bool:
     print("[OK] Step 1 complete")
     return True
 
-def run_step_2(start_now: bool) -> bool:
+def run_step_2() -> bool:
     print("\n=== STEP 2: Python Env Setup (backend) ===")
+    target_py = os.environ.get("VELA_PYTHON", "3.12")  # << baseline here
     cmd = [
         sys.executable,
         str(THIS_DIR / "python_env_bootloader.py"),
         "--deploy",
         "--venv-dir", "backend/.venv",
         "--requirements", "backend/requirements.txt",
+        "--python", target_py,
+        "--start-now",
         "--verbose",
     ]
-    if start_now:
-        cmd.append("--start-now")
-    rc = run_cmd(cmd, cwd=THIS_DIR)
-    if rc != 0:
-        print(f"[ERROR] Step 2 failed (exit {rc})")
-        return False
-    print("[OK] Step 2 complete")
-    return True
+    try:
+        res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if res.stdout: print(res.stdout, end="")
+        if res.stderr: print(res.stderr, end="")
+        if res.returncode != 0:
+            print(f"[ERROR] Step 2 failed (exit {res.returncode})")
+            return False
+        print("[OK] Step 2 complete")
+        return True
+    except Exception as e:
+        print(f"[ERRO
 
 def run_step_4_vite(force_vite: bool) -> bool:
     print("\n=== STEP 4: Frontend (Vite + React) ===")
