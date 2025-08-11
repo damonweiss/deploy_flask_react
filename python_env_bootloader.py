@@ -1,236 +1,151 @@
 #!/usr/bin/env python3
 """
-Deploy Step 1: Folder Structure Creation
-First step in the ordered deployment process - just creates folders
-
-This script is designed to be called by VelaOS after GitHub repository clone.
-It focuses solely on creating the project folder structure without any dependencies.
+Python Env Bootloader (Step 2)
+- Creates/repairs a .venv
+- Upgrades pip/setuptools/wheel
+- Optionally installs requirements.txt if present
 
 Usage:
-    python deploy_step_1.py                 # Auto-deploy (VelaOS compatible)
-    python deploy_step_1.py --deploy        # Explicit deploy
-    python deploy_step_1.py --help-only     # Show help only
+  python python_env_bootloader.py --deploy
+  python python_env_bootloader.py --deploy --venv-dir .venv
+  python python_env_bootloader.py --deploy --requirements requirements.txt
+  python python_env_bootloader.py --verbose
 """
 
-# IMMEDIATE DEBUG OUTPUT - before any imports that might fail
-print("[DEPLOY_STEP_1_FIXED] Script starting...")
-print(f"[DEPLOY_STEP_1_FIXED] Python version: {sys.version}")
-print(f"[DEPLOY_STEP_1_FIXED] Current directory: {os.getcwd()}")
-print(f"[DEPLOY_STEP_1_FIXED] Script file: {__file__}")
+from __future__ import annotations
 
+import argparse
+import logging
 import os
 import sys
 import subprocess
+import shutil
 from pathlib import Path
-import argparse
-import logging
-from datetime import datetime
 
-print("[DEPLOY_STEP_1_FIXED] All imports successful")
+ROOT = Path(__file__).resolve().parent
+DEFAULT_VENV = ROOT / ".venv"
+DEFAULT_REQS = ROOT / "requirements.txt"
 
+def setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='[%(asctime)s] %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(ROOT / "deployment.log", encoding="utf-8"),
+            logging.StreamHandler()
+        ]
+    )
 
-# Setup comprehensive logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('deployment.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
-
-def check_local_files():
-    """Check that required files are present locally."""
-    print("Checking for local bootloader files...")
-    
-    required_files = ['folder_bootloader.py', 'python_env_bootloader.py', 'bootloader_config.json']
-    missing_files = []
-    
-    for filename in required_files:
-        if not Path(filename).exists():
-            missing_files.append(filename)
-        else:
-            print(f"[OK] Found {filename}")
-    
-    if missing_files:
-        print(f"[ERROR] Missing files: {', '.join(missing_files)}")
-        print("These files should be in the same directory as deploy script")
-        return False
-    
-    return True
-
-
-def check_requirements():
-    """Check basic system requirements for folder creation."""
-    print("Checking system requirements...")
-    
-    # Check Python version
-    if sys.version_info < (3, 8):
-        print("[ERROR] Python 3.8+ required")
-        return False
-    print("[OK] Python version OK")
-    
-    # Check write permissions
+def run(cmd: list[str], title: str) -> None:
+    """Run a command, log stdout/stderr nicely, raise on failure."""
+    log.info("=" * 60)
+    log.info("%s - starting", title)
+    log.info("Command: %s", " ".join(cmd))
     try:
-        test_dir = Path.cwd() / "test_write_permission"
-        test_dir.mkdir(exist_ok=True)
-        test_dir.rmdir()
-        print("[OK] Write permissions OK")
-    except PermissionError:
-        print("[ERROR] No write permissions in current directory")
-        return False
-    
-    return True
+        res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if res.stdout:
+            log.info("%s STDOUT:", title)
+            for line in res.stdout.strip().splitlines():
+                if line.strip():
+                    log.info("  %s", line)
+        if res.stderr:
+            log.warning("%s STDERR:", title)
+            for line in res.stderr.strip().splitlines():
+                if line.strip():
+                    log.warning("  %s", line)
+        log.info("%s - success", title)
+    except subprocess.CalledProcessError as e:
+        log.error("%s - FAILED (exit %s)", title, e.returncode)
+        if e.stdout:
+            log.error("%s STDOUT:", title)
+            for line in e.stdout.strip().splitlines():
+                if line.strip():
+                    log.error("  %s", line)
+        if e.stderr:
+            log.error("%s STDERR:", title)
+            for line in e.stderr.strip().splitlines():
+                if line.strip():
+                    log.error("  %s", line)
+        raise
 
-
-def main():
-    """Main deployment entry point."""
-    logger.info("=" * 60)
-    logger.info("DEPLOY STEP 1+2: FOLDER STRUCTURE + PYTHON ENV")
-    logger.info("=" * 60)
-    logger.info(f"Starting deployment at {datetime.now()}")
-    logger.info(f"Python version: {sys.version}")
-    logger.info(f"Current working directory: {os.getcwd()}")
-    logger.info(f"Script path: {__file__}")
-    
-    # Log environment variables
-    vela_core_dir = os.environ.get("VELA_CORE_DIR")
-    if vela_core_dir:
-        logger.info(f"VELA_CORE_DIR detected: {vela_core_dir}")
+def venv_bins(venv_dir: Path) -> tuple[Path, Path]:
+    """Return (python_bin, pip_bin) inside the venv (Windows/Linux)."""
+    if os.name == "nt":
+        py = venv_dir / "Scripts" / "python.exe"
+        pip = venv_dir / "Scripts" / "pip.exe"
     else:
-        logger.info("VELA_CORE_DIR not set - running in local mode")
-    
-    # Check if we have the required files locally
-    logger.info("Checking for required bootloader files...")
-    if not check_local_files():
-        logger.error("Bootloader files not found in current directory.")
-        logger.error("This script expects to run in a repository with:")
-        logger.error("- folder_bootloader.py")
-        logger.error("- python_env_bootloader.py")
-        logger.error("- bootloader_config.json")
-        sys.exit(1)
-    
-    # Execute the folder bootloader directly (no downloads needed)
-    logger.info("Starting Step 1: Folder Structure Creation...")
-    logger.info(f"Executing command: {sys.executable} folder_bootloader.py --deploy")
-    try:
-        result = subprocess.run([sys.executable, 'folder_bootloader.py', '--deploy'], 
-                              check=True, capture_output=True, text=True)
-        
-        logger.info("Step 1 subprocess completed successfully")
-        # Show the output from folder bootloader
-        if result.stdout:
-            logger.info("Step 1 STDOUT:")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.info(f"  {line}")
-        
-        if result.stderr:
-            logger.warning("Step 1 STDERR:")
-            for line in result.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.warning(f"  {line}")
-        
-        logger.info("[SUCCESS] Step 1: Folder structure created successfully!")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"[ERROR] Step 1 failed with exit code {e.returncode}")
-        if e.stdout:
-            logger.error("Step 1 STDOUT:")
-            for line in e.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        if e.stderr:
-            logger.error("Step 1 STDERR:")
-            for line in e.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.error("Step 1 interrupted by user")
-        sys.exit(1)
-    
-    # Step 2: Python Environment Setup
-    logger.info("Starting Step 2: Python Environment Setup...")
-    logger.info(f"Executing command: {sys.executable} python_env_bootloader.py --deploy")
-    try:
-        result = subprocess.run([sys.executable, 'python_env_bootloader.py', '--deploy'], 
-                              check=True, capture_output=True, text=True)
-        
-        logger.info("Step 2 subprocess completed successfully")
-        # Show the output from python env bootloader
-        if result.stdout:
-            logger.info("Step 2 STDOUT:")
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.info(f"  {line}")
-        
-        if result.stderr:
-            logger.warning("Step 2 STDERR:")
-            for line in result.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.warning(f"  {line}")
-        
-        logger.info("[SUCCESS] Step 2: Python environment setup completed!")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"[ERROR] Step 2 failed with exit code {e.returncode}")
-        if e.stdout:
-            logger.error("Step 2 STDOUT:")
-            for line in e.stdout.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        if e.stderr:
-            logger.error("Step 2 STDERR:")
-            for line in e.stderr.strip().split('\n'):
-                if line.strip():
-                    logger.error(f"  {line}")
-        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
-        logger.error("[FAILED] Step 2 failed - check logs above")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.error("Step 2 interrupted by user")
-        logger.error("[PARTIAL SUCCESS] Step 1 completed successfully")
-        sys.exit(1)
-    
-    # Final success message
-    print("\n" + "="*60)
-    print("DEPLOYMENT SUCCESSFUL!")
-    print("="*60)
-    print("Step 1: Folder structure created")
-    print("Step 2: Python environment setup")
-    print("\nYour Flask + Vite project is ready for development!")
-    
-    print("\nWhat was created:")
-    print("- Project folder structure (backend/, frontend/, tests/, etc.)")
-    print("- Python virtual environment (.venv)")
-    print("- Basic Flask application files")
-    print("- Comprehensive .gitignore")
-    
-    print("\nNext steps:")
-    print("- Activate virtual environment")
-    print("- Install additional dependencies as needed")
-    print("- Start developing your Flask + Vite application")
+        py = venv_dir / "bin" / "python"
+        pip = venv_dir / "bin" / "pip"
+    return py, pip
 
+def ensure_venv(venv_dir: Path) -> None:
+    """Create venv if missing; repair ensurepip/pip if needed."""
+    if not venv_dir.exists():
+        run([sys.executable, "-m", "venv", str(venv_dir)], "Create venv")
+    else:
+        log.info("Venv already exists at %s", venv_dir)
 
-if __name__ == '__main__':
-    # Parse arguments - but default to deploy=True for VelaOS compatibility
-    parser = argparse.ArgumentParser(description="Deploy Step 1: Folder Structure Creation")
-    parser.add_argument("--deploy", action="store_true", help="Execute folder structure creation")
-    parser.add_argument("--help-only", action="store_true", help="Show help only (don't auto-deploy)")
-    
+    py_bin, pip_bin = venv_bins(venv_dir)
+
+    # Sometimes pip isn't present; ensurepip then upgrade
+    if not pip_bin.exists():
+        log.warning("pip not found in venv; running ensurepip")
+        run([str(py_bin), "-m", "ensurepip", "--upgrade"], "ensurepip")
+
+    # Upgrade core tooling
+    run([str(py_bin), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], "Upgrade pip/setuptools/wheel")
+
+def install_requirements(venv_dir: Path, reqs_file: Path) -> None:
+    if not reqs_file.exists():
+        log.info("No requirements file found at %s (skipping)", reqs_file)
+        return
+    py_bin, _ = venv_bins(venv_dir)
+    run([str(py_bin), "-m", "pip", "install", "-r", str(reqs_file)], f"Install requirements from {reqs_file.name}")
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Python Env Bootloader (Step 2)")
+    parser.add_argument("--deploy", action="store_true", help="Execute environment setup")
+    parser.add_argument("--venv-dir", type=str, default=str(DEFAULT_VENV), help="Venv directory (default: .venv)")
+    parser.add_argument("--requirements", type=str, default=str(DEFAULT_REQS), help="Requirements file (default: requirements.txt)")
+    parser.add_argument("--verbose", action="store_true", help="DEBUG logging")
     args = parser.parse_args()
-    
-    # Auto-deploy unless explicitly asked for help only
-    if args.help_only:
-        print("Deploy Step 1 - Use --deploy to create folder structure")
-        print("\nThis is the first step in the ordered deployment process:")
-        print("1. [THIS STEP] Create folder structure")
-        print("2. Setup Python environment (uv, .venv)")
-        print("3. Generate backend TOML")
-        print("4. Setup frontend (npm)")
-    else:
-        # Default behavior: auto-deploy (VelaOS compatibility)
-        main()
+
+    setup_logging(args.verbose)
+
+    venv_dir = Path(args.venv_dir).resolve()
+    reqs = Path(args.requirements).resolve()
+
+    log.info("Step 2: Python Environment Setup")
+    log.info("Python exe: %s", sys.executable)
+    log.info("Repo root: %s", ROOT)
+    log.info("Venv dir : %s", venv_dir)
+    log.info("Reqs file: %s", reqs)
+
+    if not args.deploy:
+        log.info("Nothing to do (run with --deploy).")
+        return 0
+
+    # Create/repair venv
+    ensure_venv(venv_dir)
+
+    # Install requirements if present
+    install_requirements(venv_dir, reqs)
+
+    log.info("Step 2 complete.")
+    return 0
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        log = logging.getLogger(__name__)
+        log.error("Interrupted by user")
+        sys.exit(1)
+    except Exception:
+        # Force non-zero exit and let deploy.py surface the traceback summary
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
