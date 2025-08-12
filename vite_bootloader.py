@@ -4,26 +4,31 @@ Vite Bootloader (STEP 4)
 - Resolves deployment root from VELA_CORE_DIR (or cwd)
 - Ensures frontend/ with React+Vite scaffold
 - Writes vite.config.js with proxy to Flask on 127.0.0.1:5000
-- Runs npm install in frontend/
+- Runs npm install in frontend/ (streams output; no "hang")
 - Upgrades start_server.py / stop_servers.py to manage BOTH Flask and Vite
 - (Optional) Installs Node.js on Windows if missing (winget/choco/scoop)
+- (Optional) --start-now to launch Flask+Vite immediately (detached)
 
 Usage:
   python vite_bootloader.py --deploy
   python vite_bootloader.py --deploy --auto-install-node
   python vite_bootloader.py --deploy --auto-install-node --pm winget   # or choco/scoop
+  python vite_bootloader.py --deploy --start-now
 """
 
 from __future__ import annotations
-import os, sys, subprocess, shutil, argparse, json, textwrap
+import os, sys, subprocess, shutil, argparse, json, textwrap, time
 from pathlib import Path
 from typing import Optional
+
+# -------------------- paths --------------------
 
 def resolve_deployment_root() -> Path:
     core_dir = os.environ.get("VELA_CORE_DIR")
     if core_dir:
         p = Path(core_dir).resolve()
         try:
+            # …/data/.vela/cores/<vh> → deployment root
             return p.parents[3]
         except IndexError:
             pass
@@ -37,20 +42,16 @@ def which(cmd: str) -> Optional[str]:
 
 def find_npm_command() -> Optional[str]:
     """Best-effort locate npm on all platforms."""
-    # 1) PATH
     npm = which("npm")
     if npm:
         return npm
 
-    # 2) Windows common paths
     if os.name == "nt":
-        # Program Files
         candidates = [
             Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "npm.cmd",
             Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs" / "npm.cmd",
             Path(os.environ.get("LocalAppData", r"C:\Users\%USERNAME%\AppData\Local")) / "Programs" / "node" / "npm.cmd",
         ]
-        # NVM for Windows current symlink
         nvm_home = os.environ.get("NVM_HOME")
         if nvm_home:
             candidates.append(Path(nvm_home) / "npm.cmd")
@@ -58,51 +59,41 @@ def find_npm_command() -> Optional[str]:
             if c.exists():
                 return str(c)
     else:
-        # mac / linux common paths (Homebrew, usr/local)
         for c in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"):
             if Path(c).exists():
                 return c
     return None
 
+def _quiet_run(pm_cmd: list[str]) -> bool:
+    try:
+        flags = 0
+        if os.name == "nt":
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_NO_WINDOW = 0x08000000
+            flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        res = subprocess.run(pm_cmd, text=True, capture_output=True, creationflags=flags if os.name=="nt" else 0)
+        return res.returncode == 0
+    except Exception:
+        return False
+
 def install_node_windows(preferred_pm: Optional[str] = None) -> bool:
-    """
-    Try to install Node.js LTS on Windows using winget, choco, or scoop.
-    Returns True if installation *likely* succeeded (we still re-check).
-    """
-    def run(pm_cmd: list[str]) -> bool:
-        try:
-            # Try to avoid extra windows popping up
-            flags = 0
-            if os.name == "nt":
-                DETACHED_PROCESS = 0x00000008
-                CREATE_NEW_PROCESS_GROUP = 0x00000200
-                CREATE_NO_WINDOW = 0x08000000
-                flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-            res = subprocess.run(pm_cmd, text=True, capture_output=True, creationflags=flags if os.name=="nt" else 0)
-            return res.returncode == 0
-        except Exception:
-            return False
+    """Try to install Node.js LTS on Windows using winget, choco, or scoop."""
+    order = []
+    if preferred_pm: order.append(preferred_pm.lower())
+    order += ["winget", "choco", "scoop"]
+    seen = set(); order = [x for x in order if not (x in seen or seen.add(x))]
 
-    # Choose provider order
-    pms = []
-    if preferred_pm:
-        pms.append(preferred_pm.lower())
-    pms.extend(["winget", "choco", "scoop"])
-    seen = set()
-    pms = [p for p in pms if not (p in seen or seen.add(p))]
-
-    for pm in pms:
+    for pm in order:
         if pm == "winget" and which("winget"):
-            # OpenJS.NodeJS.LTS is the LTS id
-            if run(["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements"]):
+            if _quiet_run(["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS",
+                           "--source", "winget", "--accept-source-agreements", "--accept-package-agreements"]):
                 return True
         elif pm == "choco" and which("choco"):
-            if run(["choco", "install", "-y", "nodejs-lts"]):
+            if _quiet_run(["choco", "install", "-y", "nodejs-lts"]):
                 return True
         elif pm == "scoop" and which("scoop"):
-            # Need main bucket for nodejs-lts
-            run(["scoop", "bucket", "add", "main"])
-            if run(["scoop", "install", "nodejs-lts"]):
+            _quiet_run(["scoop", "bucket", "add", "main"])
+            if _quiet_run(["scoop", "install", "nodejs-lts"]):
                 return True
     return False
 
@@ -113,9 +104,7 @@ def ensure_npm(auto_install: bool, preferred_pm: Optional[str]) -> Optional[str]
 
     if os.name == "nt" and auto_install:
         print("[VITE] npm not found. Attempting to install Node.js LTS (Windows).")
-        ok = install_node_windows(preferred_pm)
-        if ok:
-            # The current process PATH may not update—re-scan well-known paths
+        if install_node_windows(preferred_pm):
             npm_cmd = find_npm_command()
             if npm_cmd:
                 print(f"[VITE] Node.js installed. Found npm at: {npm_cmd}")
@@ -123,12 +112,11 @@ def ensure_npm(auto_install: bool, preferred_pm: Optional[str]) -> Optional[str]
             print("[VITE] Node.js installer finished but npm not yet visible on PATH. "
                   "Close/reopen terminal or reboot may be required.")
             return None
-        else:
-            print("[VITE] Automatic Node.js install failed or not available. "
-                  "Please install Node.js LTS manually: https://nodejs.org")
-            return None
 
-    # Non-Windows or no auto-install
+        print("[VITE] Automatic Node.js install failed or not available. "
+              "Please install Node.js LTS manually: https://nodejs.org")
+        return None
+
     print("[VITE] npm not found. Install Node.js to enable frontend.")
     return None
 
@@ -161,49 +149,73 @@ def ensure_frontend(root: Path) -> Path:
             }
         }, indent=2), encoding="utf-8")
 
+    # Branded root HTML with a visible preflight health check (before React)
     index_html = fe / "index.html"
     if not index_html.exists():
         index_html.write_text(
-            textwrap.dedent(
-                """\
+            textwrap.dedent("""\
                 <!doctype html>
                 <html>
                   <head>
                     <meta charset="UTF-8" />
                     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                    <title>Vela Vite</title>
+                    <title>VelaOS • Frontend</title>
+                    <style>
+                      :root { color-scheme: light dark; }
+                      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+                      .banner { padding: 16px 20px; background: #0a0a0a; color: #fff; }
+                      .container { padding: 24px; }
+                      .health { font-size: 14px; opacity: .85; }
+                      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+                    </style>
                   </head>
                   <body>
-                    <div id="root"></div>
+                    <div class="banner">
+                      <strong>VelaOS</strong> • React + Vite (proxy → Flask @ <code>http://127.0.0.1:5000</code>)
+                    </div>
+                    <div class="container">
+                      <div id="health-preflight" class="health">preflight: checking <code>/api/health</code>…</div>
+                      <div id="root" style="margin-top:14px;"></div>
+                    </div>
+
+                    <script>
+                      (async () => {
+                        const el = document.getElementById('health-preflight');
+                        try {
+                          const r = await fetch('/api/health', {headers:{'Accept':'application/json'}});
+                          const j = await r.json();
+                          el.textContent = 'preflight: ' + JSON.stringify(j);
+                        } catch (e) {
+                          el.textContent = 'preflight: unreachable';
+                        }
+                      })();
+                    </script>
+
                     <script type="module" src="/src/main.jsx"></script>
                   </body>
                 </html>
-                """
-            ),
+            """),
             encoding="utf-8",
         )
 
     main_jsx = fe / "src" / "main.jsx"
     if not main_jsx.exists():
         main_jsx.write_text(
-            textwrap.dedent(
-                """\
+            textwrap.dedent("""\
                 import React from "react";
                 import { createRoot } from "react-dom/client";
                 import App from "./App.jsx";
 
                 const root = createRoot(document.getElementById("root"));
                 root.render(<App />);
-                """
-            ),
+            """),
             encoding="utf-8",
         )
 
     app_jsx = fe / "src" / "App.jsx"
     if not app_jsx.exists():
         app_jsx.write_text(
-            textwrap.dedent(
-                """\
+            textwrap.dedent("""\
                 import React, { useEffect, useState } from "react";
 
                 export default function App() {
@@ -215,22 +227,20 @@ def ensure_frontend(root: Path) -> Path:
                       .catch(() => setHealth({ status: "unreachable" }));
                   }, []);
                   return (
-                    <div style={{fontFamily: "sans-serif", padding: 24}}>
-                      <h1>Vite + Flask</h1>
-                      <p>Backend health: {health ? JSON.stringify(health) : "loading..."}</p>
+                    <div>
+                      <h1 style={{margin:"8px 0"}}>Vite + Flask</h1>
+                      <p>React fetch: {health ? JSON.stringify(health) : "loading..."}</p>
                     </div>
                   );
                 }
-                """
-            ),
+            """),
             encoding="utf-8",
         )
 
     vite_cfg = fe / "vite.config.js"
     if not vite_cfg.exists():
         vite_cfg.write_text(
-            textwrap.dedent(
-                """\
+            textwrap.dedent("""\
                 import { defineConfig } from "vite";
                 import react from "@vitejs/plugin-react";
 
@@ -247,11 +257,12 @@ def ensure_frontend(root: Path) -> Path:
                     }
                   }
                 });
-                """
-            ),
+            """),
             encoding="utf-8",
         )
     return fe
+
+# -------------------- install & start --------------------
 
 def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
     if not npm_cmd:
@@ -259,22 +270,21 @@ def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
         return
 
     env = os.environ.copy()
-    # Make npm chatty enough and avoid silence while it downloads
+    # keep output flowing
     env.setdefault("npm_config_loglevel", "info")
     env.setdefault("npm_config_progress", "true")
     env.setdefault("npm_config_fund", "false")
     env.setdefault("npm_config_audit", "false")
 
-    # stream output
     label = "npm"
     print(f"[{label}] exec: {npm_cmd} install (cwd={fe_dir})", flush=True)
 
     creationflags = 0
     if os.name == "nt":
-        DETACHED_PROCESS = 0x00000008
+        # New group + no extra window. Intentionally NOT detached (we want streaming IO).
         CREATE_NEW_PROCESS_GROUP = 0x00000200
         CREATE_NO_WINDOW = 0x08000000
-        creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 
     p = subprocess.Popen(
         [npm_cmd, "install"],
@@ -290,7 +300,6 @@ def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
     assert p.stdout is not None
     try:
         for line in iter(p.stdout.readline, ""):
-            # npm sometimes uses \r progress; printing each line still shows steady activity
             print(f"[{label}] {line.rstrip()}", flush=True)
     finally:
         p.stdout.close()
@@ -299,15 +308,13 @@ def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
     if rc != 0:
         raise SystemError("npm install failed")
 
-
 def write_combined_start_stop(root: Path) -> None:
     run_dir = root / ".vela-run"; run_dir.mkdir(exist_ok=True)
     start_py = root / "start_server.py"
-    stop_py = root / "stop_servers.py"
+    stop_py  = root / "stop_servers.py"
 
     start_py.write_text(
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
             #!/usr/bin/env python3
             import os, sys, subprocess, time, shutil
             from pathlib import Path
@@ -373,20 +380,19 @@ def write_combined_start_stop(root: Path) -> None:
 
                 cmd = [str(python_exe), "-m", "flask", "run",
                        "--host", env["FLASK_RUN_HOST"], "--port", env["FLASK_RUN_PORT"]]
+
                 kwargs = dict(cwd=str(backend), env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 if os.name == "nt":
-                    DETACHED_PROCESS = 0x00000008
                     CREATE_NEW_PROCESS_GROUP = 0x00000200
                     CREATE_NO_WINDOW = 0x08000000
-                    kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                    kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
                 else:
                     kwargs["preexec_fn"] = os.setpgrp
 
                 proc = subprocess.Popen(cmd, **kwargs)
                 pid_file.write_text(str(proc.pid), encoding="utf-8")
                 print(f"[start] Flask (pid={proc.pid}) http://{env['FLASK_RUN_HOST']}:{env['FLASK_RUN_PORT']}")
-                # tail a few lines (non-blocking)
                 try:
                     for _ in range(10):
                         line = proc.stdout.readline()
@@ -422,10 +428,9 @@ def write_combined_start_stop(root: Path) -> None:
                 kwargs = dict(cwd=str(fe),
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
                 if os.name == "nt":
-                    DETACHED_PROCESS = 0x00000008
                     CREATE_NEW_PROCESS_GROUP = 0x00000200
                     CREATE_NO_WINDOW = 0x08000000
-                    kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                    kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
                 else:
                     kwargs["preexec_fn"] = os.setpgrp
 
@@ -450,14 +455,12 @@ def write_combined_start_stop(root: Path) -> None:
 
             if __name__ == "__main__":
                 sys.exit(main())
-            """
-        ),
+        """),
         encoding="utf-8",
     )
 
     stop_py.write_text(
-        textwrap.dedent(
-            """\
+        textwrap.dedent("""\
             #!/usr/bin/env python3
             import os, sys, time, signal, subprocess
             from pathlib import Path
@@ -498,10 +501,27 @@ def write_combined_start_stop(root: Path) -> None:
 
             if __name__ == "__main__":
                 sys.exit(main())
-            """
-        ),
+        """),
         encoding="utf-8",
     )
+
+def start_now_detached(root: Path) -> None:
+    """Launch start_server.py detached so the bootloader can finish."""
+    start_py = root / "start_server.py"
+    py = sys.executable
+    kwargs = dict(cwd=str(root),
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.name == "nt":
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    else:
+        kwargs["preexec_fn"] = os.setpgrp
+    try:
+        subprocess.Popen([py, str(start_py)], **kwargs)
+        print("[VITE] start_server.py launched (detached).")
+    except Exception as e:
+        print(f"[VITE] WARN: could not start servers automatically: {e}")
 
 # -------------------- entry --------------------
 
@@ -510,6 +530,7 @@ def main() -> int:
     ap.add_argument("--deploy", action="store_true", help="Install Vite/React and configure proxy")
     ap.add_argument("--auto-install-node", action="store_true", help="Attempt to install Node.js if npm is missing (Windows only)")
     ap.add_argument("--pm", choices=["winget","choco","scoop"], help="Package manager to use for Node.js install (Windows)")
+    ap.add_argument("--start-now", action="store_true", help="Start Flask + Vite immediately (detached)")
     args, _ = ap.parse_known_args()
 
     root = resolve_deployment_root()
@@ -518,6 +539,9 @@ def main() -> int:
     npm_cmd = ensure_npm(auto_install=args.auto_install_node, preferred_pm=args.pm)
     npm_install(fe, npm_cmd)
     write_combined_start_stop(root)
+
+    if args.start_now:
+        start_now_detached(root)
 
     print("[VITE] Frontend ready. Use: python start_server.py (starts Flask + Vite).")
     return 0
