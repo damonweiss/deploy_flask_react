@@ -102,18 +102,23 @@ def ensure_pip(python_exe: str) -> None:
         raise SystemError("pip is unavailable in the virtual environment")
 
 def install_requirements(python_exe: str, requirements_path: Path) -> None:
+    rc = _stream_run([str(python_exe), "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"],
+                     cwd=backend, env=env, label="pip")
+    if rc != 0:
+        return 1
+    
+    # 2) Prefer uv if available, else pip -r
     uv = shutil.which("uv")
     if uv:
-        # Use the resolver; do NOT use `uv pip sync` unless you have a compiled lock.
-        res = subprocess.run(
-            [uv, "pip", "install", "-r", str(requirements_path)],
-            capture_output=True, text=True, cwd=str(requirements_path.parent)
-        )
-        sys.stdout.write(res.stdout or "")
-        if res.returncode != 0:
-            sys.stderr.write(res.stderr or "")
-            raise SystemError("uv pip install failed")
-        return
+        print("[STEP2] Installing requirements with uv pip sync:", reqfile)
+        rc = _stream_run([uv, "pip", "sync", str(reqfile)], cwd=backend, env=env, label="uv")
+    else:
+        print("[STEP2] Installing requirements with pip -r:", reqfile)
+        rc = _stream_run([str(python_exe), "-m", "pip", "install", "-r", str(reqfile)],
+                         cwd=backend, env=env, label="pip")
+    if rc != 0:
+        print("[STEP2] ERROR: dependency install failed")
+        return 1
 
     # Fallback: pip resolver (also installs deps)
     res = subprocess.run(
@@ -124,6 +129,40 @@ def install_requirements(python_exe: str, requirements_path: Path) -> None:
     if res.returncode != 0:
         sys.stderr.write(res.stderr or "")
         raise SystemError("pip install failed")
+
+import os, sys, subprocess, time
+
+def _stream_run(cmd, cwd=None, env=None, label=""):
+    """Run a command and stream stdout to our stdout (line-by-line)."""
+    lbl = f"[{label}] " if label else ""
+    print(f"{lbl}exec: {' '.join(map(str, cmd))} (cwd={cwd or os.getcwd()})", flush=True)
+
+    creationflags = 0
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+
+    p = subprocess.Popen(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        creationflags=creationflags
+    )
+    assert p.stdout is not None
+    try:
+        for line in iter(p.stdout.readline, ""):
+            print(f"{lbl}{line.rstrip()}", flush=True)
+    finally:
+        p.stdout.close()
+    rc = p.wait()
+    print(f"{lbl}exit code: {rc}", flush=True)
+    return rc
 
 
 def verify_stack(python_exe: str) -> None:
