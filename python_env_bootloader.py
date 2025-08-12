@@ -102,29 +102,29 @@ def ensure_pip(python_exe: str) -> None:
         raise SystemError("pip is unavailable in the virtual environment")
 
 def install_requirements(python_exe: str, requirements_path: Path) -> None:
-    print("[STEP2] Upgrading pip/setuptools/wheel ...")
-    up = subprocess.run([python_exe, "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"], capture_output=True, text=True)
-    sys.stdout.write(up.stdout or "")
-    if up.returncode != 0:
-        sys.stderr.write(up.stderr or "")
-        print("[STEP2] WARN: upgrade pip tooling failed, continuing")
-
     uv = shutil.which("uv")
     if uv:
-        print(f"[STEP2] Installing requirements with uv pip sync: {requirements_path}")
-        res = subprocess.run([uv, "pip", "sync", str(requirements_path)], capture_output=True, text=True, cwd=str(requirements_path.parent))
+        # Use the resolver; do NOT use `uv pip sync` unless you have a compiled lock.
+        res = subprocess.run(
+            [uv, "pip", "install", "-r", str(requirements_path)],
+            capture_output=True, text=True, cwd=str(requirements_path.parent)
+        )
         sys.stdout.write(res.stdout or "")
-        if res.returncode == 0:
-            return
-        sys.stderr.write(res.stderr or "")
-        print("[STEP2] WARN: uv pip sync failed; falling back to pip install -r")
+        if res.returncode != 0:
+            sys.stderr.write(res.stderr or "")
+            raise SystemError("uv pip install failed")
+        return
 
-    print(f"[STEP2] Installing requirements with pip: {requirements_path}")
-    res = subprocess.run([python_exe, "-m", "pip", "install", "-r", str(requirements_path)], capture_output=True, text=True)
+    # Fallback: pip resolver (also installs deps)
+    res = subprocess.run(
+        [python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
+        capture_output=True, text=True, cwd=str(requirements_path.parent)
+    )
     sys.stdout.write(res.stdout or "")
     if res.returncode != 0:
         sys.stderr.write(res.stderr or "")
         raise SystemError("pip install failed")
+
 
 def verify_stack(python_exe: str) -> None:
     print("[STEP2] Verifying Flask stack imports ...")
