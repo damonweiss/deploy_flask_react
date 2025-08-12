@@ -395,7 +395,7 @@ def main() -> int:
             print(f"[STEP2] python={python_exe}")
             print(f"[STEP2] requirements={reqs_path}")
 
-        rc = install_requirements(python_exe, reqs_path, backend, base_env={})
+        rc = install_requirements(python_exe, reqs_path, backend, base_env=env)
         if rc != 0:
             print("[STEP2] ERROR: dependency install failed")
             return 1
