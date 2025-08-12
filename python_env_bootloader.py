@@ -437,7 +437,7 @@ def main() -> int:
             return 1
 
         verify_stack(python_exe, env)
-        write_start_stop_scripts(root)
+        write_flask_scripts(root)
 
         print(f"[STEP2] Backend venv ready: {venv_path}")
         print(f"[STEP2] Requirements installed from: {reqs_path}")
