@@ -16,6 +16,18 @@ import os, sys, subprocess, shutil, tempfile, time
 from pathlib import Path
 import argparse, textwrap, json
 
+MUST_HAVE = {
+    "flask": "Flask>=3.0,<4",
+    "werkzeug": "Werkzeug>=3.0,<4",
+    "jinja2": "Jinja2>=3.1,<4",
+    "markupsafe": "MarkupSafe>=2.1.5,<3",
+    "itsdangerous": "itsdangerous>=2.1,<3",
+    "click": "click>=8.1,<9",
+    "blinker": "blinker>=1.7,<2",
+    "flask-cors": "flask-cors>=4.0,<5",
+}
+
+
 # ---------- helpers ----------
 
 def resolve_deployment_root() -> Path:
@@ -62,20 +74,19 @@ def ensure_backend(root: Path) -> Path:
     return backend
 
 def write_requirements(requirements_path: Path) -> None:
-    if requirements_path.exists():
-        return
     requirements_path.parent.mkdir(parents=True, exist_ok=True)
-    reqs = [
-        "Flask>=3.0,<4",
-        "Werkzeug>=3.0,<4",
-        "Jinja2>=3.1,<4",
-        "MarkupSafe>=2.1.5,<3",
-        "itsdangerous>=2.1,<3",
-        "click>=8.1,<9",
-        "blinker>=1.7,<2",
-        "flask-cors>=4.0,<5",
-    ]
-    requirements_path.write_text("\n".join(reqs) + "\n", encoding="utf-8")
+    if not requirements_path.exists():
+        # fresh file with all must-haves
+        requirements_path.write_text("\n".join(MUST_HAVE.values()) + "\n", encoding="utf-8")
+        return
+    # patch existing file to include any missing must-haves
+    existing = requirements_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    lower = {ln.strip().split("==")[0].split(">=")[0].split("<")[0].lower() for ln in existing if ln.strip() and not ln.strip().startswith("#")}
+    additions = [spec for name, spec in MUST_HAVE.items() if name not in lower]
+    if additions:
+        with requirements_path.open("a", encoding="utf-8") as f:
+            f.write("\n" + "\n".join(additions) + "\n")
+
 
 def create_venv(venv_dir: Path, env: dict) -> tuple[Path, str]:
     venv_dir.mkdir(parents=True, exist_ok=True)
@@ -170,7 +181,7 @@ def verify_stack(python_exe: str, env: dict) -> None:
     print("[STEP2] Verifying Flask stack imports ...")
     verify_src = textwrap.dedent("""\
         import importlib as i, json
-        mods=['flask','werkzeug','jinja2','markupsafe','blinker']
+        mods=['flask','werkzeug','jinja2','markupsafe','blinker','click']
         missing=[]; vers={}
         for m in mods:
             try:
