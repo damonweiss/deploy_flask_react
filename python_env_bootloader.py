@@ -300,46 +300,41 @@ def maybe_start_now(root: Path) -> None:
 # --- add to python_env_bootloader.py ---
 import io
 
-def start_flask_detached(backend_dir: Path, venv_path: Path, host="127.0.0.1", port=5000) -> int:
-    """
-    Start Flask app in background (no reloader) and return immediately.
-    Logs -> backend/flask.log ; PID -> backend/flask.pid
-    """
-    python_exe = str(venv_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
-    log_file = backend_dir / "flask.log"
-    pid_file = backend_dir / "flask.pid"
+def start_flask_detached(backend: Path, venv_path: Path, host="127.0.0.1", port=5000):
+    # prefer pythonw.exe on Windows to avoid console window
+    if os.name == "nt":
+        pyw = venv_path / "Scripts" / "pythonw.exe"
+        python_exe = str(pyw if pyw.exists() else venv_path / "Scripts" / "python.exe")
+    else:
+        python_exe = str(venv_path / "bin" / "python")
 
-    # Run the app directly to avoid the reloader (which spawns and confuses PIDs)
+    log_file = backend / "flask.log"
+    pid_file = backend / "flask.pid"
+
     code = (
         "from app.main import create_app; "
         "app=create_app(); "
         f"app.run(host='{host}', port={port}, debug=False)"
     )
-
     cmd = [python_exe, "-c", code]
 
-    # open file in binary append, unbuffered-ish
     log_fh = open(log_file, "ab", buffering=0)
-
-    popen_kwargs = dict(
-        cwd=str(backend_dir),
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
-        close_fds=True,
-    )
+    kwargs = dict(cwd=str(backend), stdout=log_fh, stderr=subprocess.STDOUT, close_fds=True)
 
     if os.name == "nt":
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
-        popen_kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        CREATE_NO_WINDOW = 0x08000000
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
     else:
-        popen_kwargs["preexec_fn"] = os.setpgrp
+        kwargs["preexec_fn"] = os.setpgrp
 
-    proc = subprocess.Popen(cmd, **popen_kwargs)
+    proc = subprocess.Popen(cmd, **kwargs)
     pid_file.write_text(str(proc.pid), encoding="utf-8")
     print(f"[start] Flask dev server (detached) pid={proc.pid} -> http://{host}:{port}")
     print(f"[start] Logs: {log_file}")
     return proc.pid
+
 
 def stop_flask_if_any(backend_dir: Path):
     pid_file = backend_dir / "flask.pid"
