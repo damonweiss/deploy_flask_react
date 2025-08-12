@@ -6,13 +6,13 @@ Python Env Bootloader (STEP 2)
 - Creates backend/.venv
 - Ensures backend/requirements.txt (writes defaults if missing)
 - Upgrades pip tooling, installs requirements (uv if present → pip fallback)
-- Verifies imports (flask, werkzeug, jinja2, markupsafe, blinker) via temp script
+- Verifies imports (flask, werkzeug, jinja2, markupsafe, blinker)
 - Writes start_server.py / stop_servers.py at repo root
-- Optional --start-now to launch Flask
+- Optional --start-now to launch Flask (detached)
 """
 
 from __future__ import annotations
-import os, sys, subprocess, shutil, tempfile
+import os, sys, subprocess, shutil, tempfile, time
 from pathlib import Path
 import argparse, textwrap, json
 
@@ -34,7 +34,10 @@ def ensure_backend(root: Path) -> Path:
     (backend / "app" / "models").mkdir(parents=True, exist_ok=True)
     (backend / "app" / "utils").mkdir(parents=True, exist_ok=True)
 
-    (backend / "app" / "__init__.py").write_text("# Flask app init\n", encoding="utf-8") if not (backend / "app" / "__init__.py").exists() else None
+    ini = backend / "app" / "__init__.py"
+    if not ini.exists():
+        ini.write_text("# Flask app init\n", encoding="utf-8")
+
     main_py = backend / "app" / "main.py"
     if not main_py.exists():
         main_py.write_text(textwrap.dedent("""\
@@ -74,63 +77,32 @@ def write_requirements(requirements_path: Path) -> None:
     ]
     requirements_path.write_text("\n".join(reqs) + "\n", encoding="utf-8")
 
-def create_venv(venv_dir: Path) -> tuple[Path, str]:
+def create_venv(venv_dir: Path, env: dict) -> tuple[Path, str]:
     venv_dir.mkdir(parents=True, exist_ok=True)
     uv = shutil.which("uv")
     if uv:
-        res = subprocess.run([uv, "venv", str(venv_dir)], capture_output=True, text=True)
+        res = subprocess.run([uv, "venv", str(venv_dir)], capture_output=True, text=True, env=env)
         if res.returncode != 0:
             sys.stdout.write(res.stdout or ""); sys.stderr.write(res.stderr or "")
             raise SystemError("uv venv failed")
     else:
-        res = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, text=True)
+        res = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], capture_output=True, text=True, env=env)
         if res.returncode != 0:
             sys.stdout.write(res.stdout or ""); sys.stderr.write(res.stderr or "")
             raise SystemError("venv creation failed")
     python_exe = str(venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
     return venv_dir, python_exe
 
-def ensure_pip(python_exe: str) -> None:
-    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True)
+def ensure_pip(python_exe: str, env: dict) -> None:
+    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True, env=env)
     if chk.returncode == 0:
         return
     print("[STEP2] Bootstrapping pip via ensurepip ...")
-    ep = subprocess.run([python_exe, "-m", "ensurepip", "--upgrade"], capture_output=True, text=True)
+    ep = subprocess.run([python_exe, "-m", "ensurepip", "--upgrade"], capture_output=True, text=True, env=env)
     sys.stdout.write(ep.stdout or ""); sys.stderr.write(ep.stderr or "")
-    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True)
+    chk = subprocess.run([python_exe, "-m", "pip", "--version"], capture_output=True, text=True, env=env)
     if chk.returncode != 0:
         raise SystemError("pip is unavailable in the virtual environment")
-
-def install_requirements(python_exe: str, requirements_path: Path) -> None:
-    rc = _stream_run([str(python_exe), "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"],
-                     cwd=backend, env=env, label="pip")
-    if rc != 0:
-        return 1
-    
-    # 2) Prefer uv if available, else pip -r
-    uv = shutil.which("uv")
-    if uv:
-        print("[STEP2] Installing requirements with uv pip sync:", reqfile)
-        rc = _stream_run([uv, "pip", "sync", str(reqfile)], cwd=backend, env=env, label="uv")
-    else:
-        print("[STEP2] Installing requirements with pip -r:", reqfile)
-        rc = _stream_run([str(python_exe), "-m", "pip", "install", "-r", str(reqfile)],
-                         cwd=backend, env=env, label="pip")
-    if rc != 0:
-        print("[STEP2] ERROR: dependency install failed")
-        return 1
-
-    # Fallback: pip resolver (also installs deps)
-    res = subprocess.run(
-        [python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
-        capture_output=True, text=True, cwd=str(requirements_path.parent)
-    )
-    sys.stdout.write(res.stdout or "")
-    if res.returncode != 0:
-        sys.stderr.write(res.stderr or "")
-        raise SystemError("pip install failed")
-
-import os, sys, subprocess, time
 
 def _stream_run(cmd, cwd=None, env=None, label=""):
     """Run a command and stream stdout to our stdout (line-by-line)."""
@@ -142,7 +114,7 @@ def _stream_run(cmd, cwd=None, env=None, label=""):
         DETACHED_PROCESS = 0x00000008
         CREATE_NEW_PROCESS_GROUP = 0x00000200
         CREATE_NO_WINDOW = 0x08000000
-        creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW  # we want a console for installs, but no new window
 
     p = subprocess.Popen(
         cmd,
@@ -164,8 +136,25 @@ def _stream_run(cmd, cwd=None, env=None, label=""):
     print(f"{lbl}exit code: {rc}", flush=True)
     return rc
 
+def install_requirements(python_exe: str, requirements_path: Path, backend: Path, env: dict) -> int:
+    # 1) Upgrade bootstrappers
+    rc = _stream_run([str(python_exe), "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"],
+                     cwd=backend, env=env, label="pip")
+    if rc != 0:
+        return rc
 
-def verify_stack(python_exe: str) -> None:
+    # 2) Prefer uv if available, else pip -r
+    uv = shutil.which("uv")
+    if uv:
+        print("[STEP2] Installing requirements with uv pip sync:", requirements_path)
+        rc = _stream_run([uv, "pip", "sync", str(requirements_path)], cwd=backend, env=env, label="uv")
+    else:
+        print("[STEP2] Installing requirements with pip -r:", requirements_path)
+        rc = _stream_run([str(python_exe), "-m", "pip", "install", "-r", str(requirements_path)],
+                         cwd=backend, env=env, label="pip")
+    return rc
+
+def verify_stack(python_exe: str, env: dict) -> None:
     print("[STEP2] Verifying Flask stack imports ...")
     verify_src = textwrap.dedent("""\
         import importlib as i, json
@@ -183,7 +172,7 @@ def verify_stack(python_exe: str) -> None:
         tf.write(verify_src)
         tf_path = tf.name
     try:
-        res = subprocess.run([python_exe, tf_path], capture_output=True, text=True)
+        res = subprocess.run([python_exe, tf_path], capture_output=True, text=True, env=env)
         if res.stdout:
             print("[STEP2] Verify output:", res.stdout.strip())
         if res.returncode != 0:
@@ -206,12 +195,12 @@ def write_start_stop_scripts(root: Path) -> None:
 
     if not start_py.exists():
         start_py.write_text(textwrap.dedent("""\
-            import os, sys, subprocess, time, json, importlib
+            import os, sys, subprocess, time, json
             from pathlib import Path
 
             ROOT = Path(__file__).parent
             VENV = ROOT / "backend" / ".venv"
-            PY   = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            PY   = VENV / ("Scripts/pythonw.exe" if os.name == "nt" else "bin/python")
             PIDF = ROOT / ".pids.json"
 
             def _record_pid(kind, pid):
@@ -231,44 +220,21 @@ def write_start_stop_scripts(root: Path) -> None:
                     return None
 
             def run_direct():
-                \"\"\"Start Flask by importing the factory directly (no CLI discovery).\"\"\"
                 code = (
                     "from app.main import create_app\\n"
                     "app = create_app()\\n"
                     "app.run(host='127.0.0.1', port=5000, debug=True)\\n"
                 )
                 env = os.environ.copy()
-                env["PYTHONUTF8"] = "1"
+                env.setdefault("PYTHONIOENCODING","utf-8")
+                env.setdefault("PYTHONUNBUFFERED","1")
                 p = subprocess.Popen(
                     [str(PY), "-c", code],
                     cwd=str(ROOT / "backend"),
                     env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
                 )
-                print(f"[start] Flask dev server (direct) starting pid={p.pid} → http://127.0.0.1:5000")
-                _record_pid("flask_pid", p.pid)
-                # print a few lines then detach
-                t_end = time.time() + 3
-                try:
-                    while time.time() < t_end:
-                        line = p.stdout.readline()
-                        if not line: break
-                        print(line.rstrip())
-                except Exception:
-                    pass
-
-            def run_cli():
-                \"\"\"Fallback to Flask CLI if direct import ever fails.\"\"\"
-                env = os.environ.copy()
-                env["PYTHONUTF8"] = "1"
-                env["FLASK_APP"] = "app.main:create_app"
-                p = subprocess.Popen(
-                    [str(PY), "-m", "flask", "run", "--debug", "--host", "127.0.0.1", "--port", "5000"],
-                    cwd=str(ROOT / "backend"),
-                    env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                )
-                print(f"[start] Flask dev server (CLI) starting pid={p.pid} → http://127.0.0.1:5000")
+                print(f"[start] Flask dev server (direct) starting pid={p.pid} \u2192 http://127.0.0.1:5000")
                 _record_pid("flask_pid", p.pid)
                 t_end = time.time() + 3
                 try:
@@ -284,12 +250,7 @@ def write_start_stop_scripts(root: Path) -> None:
                 if running:
                     print(f"[start] Flask already appears to be running (pid={running}).")
                     sys.exit(0)
-                try:
-                    # Prefer direct import (no discovery); fallback to CLI if it throws.
-                    run_direct()
-                except Exception as e:
-                    print(f"[start] direct import failed, falling back to CLI: {e}")
-                    run_cli()
+                run_direct()
         """), encoding="utf-8")
 
     if not stop_py.exists():
@@ -329,17 +290,7 @@ def write_start_stop_scripts(root: Path) -> None:
                     print("[stop] nothing to stop")
         """), encoding="utf-8")
 
-
-def maybe_start_now(root: Path) -> None:
-    try:
-        subprocess.Popen([sys.executable, str(root / "start_server.py")], cwd=str(root))
-    except Exception as e:
-        print(f"[STEP2] WARN: could not start server automatically: {e}")
-
-# --- add to python_env_bootloader.py ---
-import io
-
-def start_flask_detached(backend: Path, venv_path: Path, host="127.0.0.1", port=5000):
+def start_flask_detached(backend: Path, venv_path: Path, env: dict, host="127.0.0.1", port=5000):
     # prefer pythonw.exe on Windows to avoid console window
     if os.name == "nt":
         pyw = venv_path / "Scripts" / "pythonw.exe"
@@ -357,8 +308,8 @@ def start_flask_detached(backend: Path, venv_path: Path, host="127.0.0.1", port=
     )
     cmd = [python_exe, "-c", code]
 
-    log_fh = open(log_file, "ab", buffering=0)
-    kwargs = dict(cwd=str(backend), stdout=log_fh, stderr=subprocess.STDOUT, close_fds=True)
+    lf = open(log_file, "ab", buffering=0)
+    kwargs = dict(cwd=str(backend), stdout=lf, stderr=subprocess.STDOUT, close_fds=True, env=env)
 
     if os.name == "nt":
         DETACHED_PROCESS = 0x00000008
@@ -373,7 +324,6 @@ def start_flask_detached(backend: Path, venv_path: Path, host="127.0.0.1", port=
     print(f"[start] Flask dev server (detached) pid={proc.pid} -> http://{host}:{port}")
     print(f"[start] Logs: {log_file}")
     return proc.pid
-
 
 def stop_flask_if_any(backend_dir: Path):
     pid_file = backend_dir / "flask.pid"
@@ -392,7 +342,6 @@ def stop_flask_if_any(backend_dir: Path):
         try: pid_file.unlink(missing_ok=True)
         except Exception: pass
 
-
 # ---------- main ----------
 
 def main() -> int:
@@ -409,6 +358,13 @@ def main() -> int:
         print(f"[STEP2] deployment_root={root}")
         print(f"[STEP2] argv={sys.argv}")
 
+    # one env for all children (unbuffered + saner pip/uv)
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    env.setdefault("UV_SYSTEM_PYTHON", "1")
+
     backend = ensure_backend(root)
 
     venv_dir = (root / args.venv_dir).resolve() if not Path(args.venv_dir).is_absolute() else Path(args.venv_dir)
@@ -419,24 +375,27 @@ def main() -> int:
             print("[STEP2] requirements.txt missing — writing defaults …")
             write_requirements(reqs_path)
 
-        venv_path, python_exe = create_venv(venv_dir)
-        ensure_pip(python_exe)
+        venv_path, python_exe = create_venv(venv_dir, env)
+        ensure_pip(python_exe, env)
 
         if args.verbose:
             print(f"[STEP2] venv={venv_path}")
             print(f"[STEP2] python={python_exe}")
             print(f"[STEP2] requirements={reqs_path}")
 
-        install_requirements(python_exe, reqs_path)
-        verify_stack(python_exe)
+        rc = install_requirements(python_exe, reqs_path, backend, env)
+        if rc != 0:
+            print("[STEP2] ERROR: dependency install failed")
+            return 1
+
+        verify_stack(python_exe, env)
         write_start_stop_scripts(root)
 
         print(f"[STEP2] Backend venv ready: {venv_path}")
         print(f"[STEP2] Requirements installed from: {reqs_path}")
 
         if args.start_now:
-            # maybe_start_now(root)
-            start_flask_detached(backend, venv_path, host="127.0.0.1", port=5000)
+            start_flask_detached(backend, venv_path, env, host="127.0.0.1", port=5000)
 
         print("[STEP2] Python Env Bootloader: SUCCESS")
         return 0
