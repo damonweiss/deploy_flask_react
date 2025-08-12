@@ -136,23 +136,45 @@ def _stream_run(cmd, cwd=None, env=None, label=""):
     print(f"{lbl}exit code: {rc}", flush=True)
     return rc
 
-def install_requirements(python_exe: str, requirements_path: Path, backend: Path, env: dict) -> int:
-    # 1) Upgrade bootstrappers
-    rc = _stream_run([str(python_exe), "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"],
-                     cwd=backend, env=env, label="pip")
-    if rc != 0:
-        return rc
+# add/replace this function
+def install_requirements(python_exe: str, requirements_path: Path, backend_dir: Path) -> None:
+    # venv dir & bin
+    venv_dir = Path(python_exe).parent.parent
+    bin_dir = venv_dir / ("Scripts" if os.name == "nt" else "bin")
 
-    # 2) Prefer uv if available, else pip -r
+    # env that targets the venv
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env["VIRTUAL_ENV"] = str(venv_dir)
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    # make sure uv doesn't pick system python
+    env.pop("UV_SYSTEM_PYTHON", None)
+
+    # 1) upgrade pip tooling INSIDE the venv
+    rc = _stream_run([python_exe, "-m", "pip", "install", "-U", "pip", "setuptools", "wheel"],
+                     cwd=backend_dir, env=env, label="pip")
+    if rc != 0:
+        raise SystemError("pip upgrade failed")
+
+    # 2) Prefer uv (pinned to the venv) else pip -r
     uv = shutil.which("uv")
+    used_uv = False
     if uv:
         print("[STEP2] Installing requirements with uv pip sync:", requirements_path)
-        rc = _stream_run([uv, "pip", "sync", str(requirements_path)], cwd=backend, env=env, label="uv")
-    else:
+        rc = _stream_run([uv, "pip", "sync", "--python", python_exe, str(requirements_path)],
+                         cwd=backend_dir, env=env, label="uv")
+        used_uv = True
+
+    if (not uv) or rc != 0:
+        if used_uv:
+            print("[STEP2] uv failed; falling back to pip -r")
         print("[STEP2] Installing requirements with pip -r:", requirements_path)
-        rc = _stream_run([str(python_exe), "-m", "pip", "install", "-r", str(requirements_path)],
-                         cwd=backend, env=env, label="pip")
-    return rc
+        rc = _stream_run([python_exe, "-m", "pip", "install", "-r", str(requirements_path)],
+                         cwd=backend_dir, env=env, label="pip")
+        if rc != 0:
+            raise SystemError("dependency install failed")
+
 
 def verify_stack(python_exe: str, env: dict) -> None:
     print("[STEP2] Verifying Flask stack imports ...")
@@ -383,7 +405,7 @@ def main() -> int:
             print(f"[STEP2] python={python_exe}")
             print(f"[STEP2] requirements={reqs_path}")
 
-        rc = install_requirements(python_exe, reqs_path, backend, env)
+        rc = install_requirements(python_exe, reqs_path, backend)
         if rc != 0:
             print("[STEP2] ERROR: dependency install failed")
             return 1
