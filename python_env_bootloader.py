@@ -297,6 +297,68 @@ def maybe_start_now(root: Path) -> None:
     except Exception as e:
         print(f"[STEP2] WARN: could not start server automatically: {e}")
 
+# --- add to python_env_bootloader.py ---
+import io
+
+def start_flask_detached(backend_dir: Path, venv_path: Path, host="127.0.0.1", port=5000) -> int:
+    """
+    Start Flask app in background (no reloader) and return immediately.
+    Logs -> backend/flask.log ; PID -> backend/flask.pid
+    """
+    python_exe = str(venv_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+    log_file = backend_dir / "flask.log"
+    pid_file = backend_dir / "flask.pid"
+
+    # Run the app directly to avoid the reloader (which spawns and confuses PIDs)
+    code = (
+        "from app.main import create_app; "
+        "app=create_app(); "
+        f"app.run(host='{host}', port={port}, debug=False)"
+    )
+
+    cmd = [python_exe, "-c", code]
+
+    # open file in binary append, unbuffered-ish
+    log_fh = open(log_file, "ab", buffering=0)
+
+    popen_kwargs = dict(
+        cwd=str(backend_dir),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        close_fds=True,
+    )
+
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        popen_kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["preexec_fn"] = os.setpgrp
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
+    print(f"[start] Flask dev server (detached) pid={proc.pid} -> http://{host}:{port}")
+    print(f"[start] Logs: {log_file}")
+    return proc.pid
+
+def stop_flask_if_any(backend_dir: Path):
+    pid_file = backend_dir / "flask.pid"
+    if not pid_file.exists():
+        return
+    try:
+        pid = int(pid_file.read_text().strip())
+    except Exception:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
+        else:
+            os.kill(pid, 15)
+    finally:
+        try: pid_file.unlink(missing_ok=True)
+        except Exception: pass
+
+
 # ---------- main ----------
 
 def main() -> int:
@@ -339,7 +401,8 @@ def main() -> int:
         print(f"[STEP2] Requirements installed from: {reqs_path}")
 
         if args.start_now:
-            maybe_start_now(root)
+            # maybe_start_now(root)
+            start_flask_detached(backend, venv_path, host="127.0.0.1", port=5000)
 
         print("[STEP2] Python Env Bootloader: SUCCESS")
         return 0
