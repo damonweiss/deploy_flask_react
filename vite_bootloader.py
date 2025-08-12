@@ -6,16 +6,18 @@ Vite Bootloader (STEP 4)
 - Writes vite.config.js with proxy to Flask on 127.0.0.1:5000
 - Runs npm install in frontend/
 - Upgrades start_server.py / stop_servers.py to manage BOTH Flask and Vite
+- (Optional) Installs Node.js on Windows if missing (winget/choco/scoop)
+
+Usage:
+  python vite_bootloader.py --deploy
+  python vite_bootloader.py --deploy --auto-install-node
+  python vite_bootloader.py --deploy --auto-install-node --pm winget   # or choco/scoop
 """
 
 from __future__ import annotations
-import os
-import sys
-import subprocess
+import os, sys, subprocess, shutil, argparse, json, textwrap
 from pathlib import Path
-import argparse
-import json
-import textwrap
+from typing import Optional
 
 def resolve_deployment_root() -> Path:
     core_dir = os.environ.get("VELA_CORE_DIR")
@@ -26,6 +28,111 @@ def resolve_deployment_root() -> Path:
         except IndexError:
             pass
     return Path.cwd().resolve()
+
+# -------------------- npm / Node helpers --------------------
+
+def which(cmd: str) -> Optional[str]:
+    p = shutil.which(cmd)
+    return str(Path(p).resolve()) if p else None
+
+def find_npm_command() -> Optional[str]:
+    """Best-effort locate npm on all platforms."""
+    # 1) PATH
+    npm = which("npm")
+    if npm:
+        return npm
+
+    # 2) Windows common paths
+    if os.name == "nt":
+        # Program Files
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "npm.cmd",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs" / "npm.cmd",
+            Path(os.environ.get("LocalAppData", r"C:\Users\%USERNAME%\AppData\Local")) / "Programs" / "node" / "npm.cmd",
+        ]
+        # NVM for Windows current symlink
+        nvm_home = os.environ.get("NVM_HOME")
+        if nvm_home:
+            candidates.append(Path(nvm_home) / "npm.cmd")
+        for c in candidates:
+            if c.exists():
+                return str(c)
+    else:
+        # mac / linux common paths (Homebrew, usr/local)
+        for c in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"):
+            if Path(c).exists():
+                return c
+    return None
+
+def install_node_windows(preferred_pm: Optional[str] = None) -> bool:
+    """
+    Try to install Node.js LTS on Windows using winget, choco, or scoop.
+    Returns True if installation *likely* succeeded (we still re-check).
+    """
+    def run(pm_cmd: list[str]) -> bool:
+        try:
+            # Try to avoid extra windows popping up
+            flags = 0
+            if os.name == "nt":
+                DETACHED_PROCESS = 0x00000008
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                CREATE_NO_WINDOW = 0x08000000
+                flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            res = subprocess.run(pm_cmd, text=True, capture_output=True, creationflags=flags if os.name=="nt" else 0)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    # Choose provider order
+    pms = []
+    if preferred_pm:
+        pms.append(preferred_pm.lower())
+    pms.extend(["winget", "choco", "scoop"])
+    seen = set()
+    pms = [p for p in pms if not (p in seen or seen.add(p))]
+
+    for pm in pms:
+        if pm == "winget" and which("winget"):
+            # OpenJS.NodeJS.LTS is the LTS id
+            if run(["winget", "install", "-e", "--id", "OpenJS.NodeJS.LTS", "--source", "winget", "--accept-source-agreements", "--accept-package-agreements"]):
+                return True
+        elif pm == "choco" and which("choco"):
+            if run(["choco", "install", "-y", "nodejs-lts"]):
+                return True
+        elif pm == "scoop" and which("scoop"):
+            # Need main bucket for nodejs-lts
+            run(["scoop", "bucket", "add", "main"])
+            if run(["scoop", "install", "nodejs-lts"]):
+                return True
+    return False
+
+def ensure_npm(auto_install: bool, preferred_pm: Optional[str]) -> Optional[str]:
+    npm_cmd = find_npm_command()
+    if npm_cmd:
+        return npm_cmd
+
+    if os.name == "nt" and auto_install:
+        print("[VITE] npm not found. Attempting to install Node.js LTS (Windows).")
+        ok = install_node_windows(preferred_pm)
+        if ok:
+            # The current process PATH may not update—re-scan well-known paths
+            npm_cmd = find_npm_command()
+            if npm_cmd:
+                print(f"[VITE] Node.js installed. Found npm at: {npm_cmd}")
+                return npm_cmd
+            print("[VITE] Node.js installer finished but npm not yet visible on PATH. "
+                  "Close/reopen terminal or reboot may be required.")
+            return None
+        else:
+            print("[VITE] Automatic Node.js install failed or not available. "
+                  "Please install Node.js LTS manually: https://nodejs.org")
+            return None
+
+    # Non-Windows or no auto-install
+    print("[VITE] npm not found. Install Node.js to enable frontend.")
+    return None
+
+# -------------------- scaffolding --------------------
 
 def ensure_frontend(root: Path) -> Path:
     fe = root / "frontend"
@@ -144,16 +251,14 @@ def ensure_frontend(root: Path) -> Path:
             ),
             encoding="utf-8",
         )
-
     return fe
 
-def npm_install(fe_dir: Path) -> None:
-    try:
-        subprocess.run(["npm", "--version"], capture_output=True, check=True)
-    except Exception:
-        print("[VITE] npm not found. Install Node.js to enable frontend.")
+def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
+    if not npm_cmd:
+        print("[VITE] Skipping npm install (npm not available).")
         return
-    res = subprocess.run(["npm", "install"], cwd=str(fe_dir), text=True)
+    # On Windows npm is a .cmd; calling without shell is fine if we pass full path.
+    res = subprocess.run([npm_cmd, "install"], cwd=str(fe_dir), text=True, shell=False)
     if res.returncode != 0:
         raise SystemError("npm install failed")
 
@@ -166,7 +271,7 @@ def write_combined_start_stop(root: Path) -> None:
         textwrap.dedent(
             """\
             #!/usr/bin/env python3
-            import os, sys, subprocess, time
+            import os, sys, subprocess, time, shutil
             from pathlib import Path
 
             def pid_alive(pid: int) -> bool:
@@ -180,6 +285,27 @@ def write_combined_start_stop(root: Path) -> None:
                         return True
                 except Exception:
                     return False
+
+            def find_npm() -> str | None:
+                p = shutil.which("npm")
+                if p: return p
+                if os.name == "nt":
+                    candidates = [
+                        Path(os.environ.get("ProgramFiles", r"C:\\Program Files")) / "nodejs" / "npm.cmd",
+                        Path(os.environ.get("ProgramFiles(x86)", r"C:\\Program Files (x86)")) / "nodejs" / "npm.cmd",
+                        Path(os.environ.get("LocalAppData", r"C:\\Users\\%USERNAME%\\AppData\\Local")) / "Programs" / "node" / "npm.cmd",
+                    ]
+                    nvm_home = os.environ.get("NVM_HOME")
+                    if nvm_home:
+                        candidates.append(Path(nvm_home) / "npm.cmd")
+                    for c in candidates:
+                        if c.exists():
+                            return str(c)
+                else:
+                    for c in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"):
+                        if Path(c).exists():
+                            return c
+                return None
 
             def start_flask(root: Path) -> int:
                 backend = root / "backend"
@@ -207,15 +333,22 @@ def write_combined_start_stop(root: Path) -> None:
                 env.setdefault("FLASK_RUN_HOST", "127.0.0.1")
                 env.setdefault("FLASK_RUN_PORT", "5000")
 
-                cmd = [str(python_exe), "-m", "flask", "run", "--debug",
+                cmd = [str(python_exe), "-m", "flask", "run",
                        "--host", env["FLASK_RUN_HOST"], "--port", env["FLASK_RUN_PORT"]]
-                proc = subprocess.Popen(
-                    cmd, cwd=str(backend), env=env,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                )
+                kwargs = dict(cwd=str(backend), env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                if os.name == "nt":
+                    DETACHED_PROCESS = 0x00000008
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    CREATE_NO_WINDOW = 0x08000000
+                    kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                else:
+                    kwargs["preexec_fn"] = os.setpgrp
+
+                proc = subprocess.Popen(cmd, **kwargs)
                 pid_file.write_text(str(proc.pid), encoding="utf-8")
                 print(f"[start] Flask (pid={proc.pid}) http://{env['FLASK_RUN_HOST']}:{env['FLASK_RUN_PORT']}")
-                # tail a few lines
+                # tail a few lines (non-blocking)
                 try:
                     for _ in range(10):
                         line = proc.stdout.readline()
@@ -242,18 +375,23 @@ def write_combined_start_stop(root: Path) -> None:
                     elif old:
                         print(f"[start] Vite already running (pid={old})"); return old
 
-                try:
-                    subprocess.run(["npm", "--version"], capture_output=True, check=True)
-                except Exception:
+                npm_cmd = find_npm()
+                if not npm_cmd:
                     print("[start] npm not found; skipping Vite.")
                     return None
 
-                # Use npm run dev
-                cmd = ["npm", "run", "dev"]
-                proc = subprocess.Popen(
-                    cmd, cwd=str(fe),
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=(os.name=="nt")
-                )
+                cmd = [npm_cmd, "run", "dev"]
+                kwargs = dict(cwd=str(fe),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                if os.name == "nt":
+                    DETACHED_PROCESS = 0x00000008
+                    CREATE_NEW_PROCESS_GROUP = 0x00000200
+                    CREATE_NO_WINDOW = 0x08000000
+                    kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                else:
+                    kwargs["preexec_fn"] = os.setpgrp
+
+                proc = subprocess.Popen(cmd, **kwargs)
                 pid_file.write_text(str(proc.pid), encoding="utf-8")
                 print(f"[start] Vite (pid={proc.pid}) http://127.0.0.1:5173")
                 try:
@@ -327,15 +465,22 @@ def write_combined_start_stop(root: Path) -> None:
         encoding="utf-8",
     )
 
+# -------------------- entry --------------------
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--deploy", action="store_true", help="Install Vite/React and configure proxy")
+    ap.add_argument("--auto-install-node", action="store_true", help="Attempt to install Node.js if npm is missing (Windows only)")
+    ap.add_argument("--pm", choices=["winget","choco","scoop"], help="Package manager to use for Node.js install (Windows)")
     args, _ = ap.parse_known_args()
 
     root = resolve_deployment_root()
     fe = ensure_frontend(root)
-    npm_install(fe)
+
+    npm_cmd = ensure_npm(auto_install=args.auto_install_node, preferred_pm=args.pm)
+    npm_install(fe, npm_cmd)
     write_combined_start_stop(root)
+
     print("[VITE] Frontend ready. Use: python start_server.py (starts Flask + Vite).")
     return 0
 
