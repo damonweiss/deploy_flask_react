@@ -214,234 +214,130 @@ def verify_stack(python_exe: str, env: dict) -> None:
         try: os.remove(tf_path)
         except Exception: pass
 
-def write_start_stop_scripts(root: Path) -> None:
-    start_py = root / "start_server.py"
-    stop_py  = root / "stop_servers.py"
+def write_flask_scripts(root: Path) -> None:
+    run_dir = root / ".vela-run"
+    run_dir.mkdir(exist_ok=True)
 
-    def needs_update(p: Path) -> bool:
-        try:
-            return (not p.exists()) or ("VELA_START_SERVER_V2" not in p.read_text(encoding="utf-8", errors="ignore"))
-        except Exception:
+    start_flask = root / "start_flask.py"
+    stop_flask  = root / "stop_flask.py"
+
+    start_flask.write_text(r"""#!/usr/bin/env python3
+import os, sys, time, subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+BACKEND = ROOT / "backend"
+RUN = ROOT / ".vela-run"; RUN.mkdir(exist_ok=True)
+PIDF = RUN / "flask.pid"
+LOGF = BACKEND / "flask.log"
+
+def pid_alive(pid: int) -> bool:
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
+            return str(pid) in out.stdout
+        else:
+            os.kill(pid, 0)
             return True
+    except Exception:
+        return False
 
-    if needs_update(start_py):
-        start_py.write_text(textwrap.dedent(r"""\
-            #!/usr/bin/env python3
-            # VELA_START_SERVER_V2
-            import os, sys, time, json, shutil, subprocess, urllib.request
-            from pathlib import Path
+def read_pid():
+    try:
+        if PIDF.exists():
+            p = int(PIDF.read_text().strip())
+            if pid_alive(p): return p
+    except Exception:
+        pass
+    return None
 
-            ROOT = Path(__file__).resolve().parent
-            BACKEND = ROOT / "backend"
-            FRONTEND = ROOT / "frontend"
-            PIDF = ROOT / ".pids.json"
+def write_pid(pid: int):
+    PIDF.write_text(str(pid), encoding="utf-8")
 
-            def _read_pid(kind: str):
-                if not PIDF.exists(): return None
-                try:
-                    P = json.loads(PIDF.read_text(encoding="utf-8"))
-                    pid = P.get(kind)
-                    if pid and _pid_alive(pid): return pid
-                except Exception: pass
-                return None
+def venv_python() -> str:
+    v = BACKEND / ".venv" / ("Scripts/pythonw.exe" if os.name=="nt" else "bin/python")
+    if v.exists(): return str(v)
+    v = BACKEND / ".venv" / ("Scripts/python.exe" if os.name=="nt" else "bin/python")
+    return str(v if v.exists() else sys.executable)
 
-            def _write_pid(kind: str, pid: int):
-                P = {}
-                if PIDF.exists():
-                    try: P = json.loads(PIDF.read_text(encoding="utf-8"))
-                    except Exception: P = {}
-                P[kind] = pid
-                PIDF.write_text(json.dumps(P), encoding="utf-8")
+def start(detached: bool = True, host="127.0.0.1", port=5000):
+    existing = read_pid()
+    if existing:
+        print(f"[flask] already running pid={existing}")
+        return existing
 
-            def _pid_alive(pid: int) -> bool:
-                try:
-                    if os.name == "nt":
-                        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
-                        return str(pid) in out.stdout
-                    else:
-                        os.kill(pid, 0)
-                        return True
-                except Exception:
-                    return False
+    code = (
+        "from app.main import create_app; "
+        "app=create_app(); "
+        f"app.run(host='{host}', port={port}, debug=False)"
+    )
+    py = venv_python()
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONPATH"] = str(BACKEND)
 
-            def _find_venv_python() -> Path:
-                venv = BACKEND / ".venv"
-                p = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-                return p if p.exists() else Path(sys.executable)
+    kwargs = dict(cwd=str(BACKEND), env=env)
+    if detached:
+        log = open(LOGF, "ab", buffering=0)
+        kwargs.update(stdout=log, stderr=subprocess.STDOUT, close_fds=True)
+        if os.name == "nt":
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_NO_WINDOW = 0x08000000
+            kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        else:
+            kwargs["preexec_fn"] = os.setpgrp
+    else:
+        kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
 
-            def _wait_health(url="http://127.0.0.1:5000/api/health", timeout=25):
-                t0 = time.time()
-                while time.time() - t0 < timeout:
-                    try:
-                        with urllib.request.urlopen(url, timeout=3) as r:
-                            if 200 <= r.status < 300: return True
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                return False
+    p = subprocess.Popen([py, "-c", code], **kwargs)
+    write_pid(p.pid)
+    print(f"[flask] pid={p.pid} → http://{host}:{port}")
+    if not detached and p.stdout:
+        for _ in range(30):
+            ln = p.stdout.readline()
+            if not ln: break
+            print("[flask]", ln.rstrip())
+    return p.pid
 
-            def _find_npm() -> str | None:
-                p = shutil.which("npm")
-                if p: return p
-                if os.name == "nt":
-                    candidates = [
-                        Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "npm.cmd",
-                        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs" / "npm.cmd",
-                        Path(os.environ.get("LocalAppData", r"C:\Users\%USERNAME%\AppData\Local")) / "Programs" / "node" / "npm.cmd",
-                    ]
-                    nvm = os.environ.get("NVM_HOME")
-                    if nvm: candidates.append(Path(nvm) / "npm.cmd")
-                    for c in candidates:
-                        if c.exists(): return str(c)
-                else:
-                    for c in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"):
-                        if Path(c).exists(): return c
-                return None
+if __name__ == "__main__":
+    start(detached=True)
+""", encoding="utf-8")
 
-            def _npm_install_if_needed(npm_cmd: str) -> bool:
-                nm = FRONTEND / "node_modules"
-                pkg = FRONTEND / "package.json"
-                if not pkg.exists():
-                    print("[vite] no package.json — skipping frontend start.")
-                    return False
-                if nm.exists():
-                    return True
-                env = os.environ.copy()
-                env.setdefault("npm_config_loglevel", "info")
-                env.setdefault("npm_config_progress", "true")
-                env.setdefault("npm_config_audit", "false")
-                env.setdefault("npm_config_fund", "false")
-                cmd = [npm_cmd, "ci"] if (FRONTEND / "package-lock.json").exists() else [npm_cmd, "install"]
-                print("[vite] installing dependencies…")
-                p = subprocess.Popen(cmd, cwd=str(FRONTEND), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                assert p.stdout
-                for line in p.stdout:
-                    print("[npm]", line.rstrip())
-                rc = p.wait()
-                print("[npm] exit code:", rc)
-                return rc == 0
+    stop_flask.write_text(r"""#!/usr/bin/env python3
+import os, subprocess
+from pathlib import Path
 
-            def _start_flask() -> int:
-                existing = _read_pid("flask_pid")
-                if existing:
-                    print(f"[start] Flask already running (pid={existing})")
-                    return existing
-                py = _find_venv_python()
-                env = os.environ.copy()
-                env["FLASK_APP"] = "app.main:create_app"
-                env["PYTHONPATH"] = str(BACKEND)
-                env.setdefault("FLASK_RUN_HOST", "127.0.0.1")
-                env.setdefault("FLASK_RUN_PORT", "5000")
+ROOT = Path(__file__).resolve().parent
+RUN  = ROOT / ".vela-run"
+PIDF = RUN / "flask.pid"
 
-                cmd = [str(py), "-m", "flask", "run", "--host", env["FLASK_RUN_HOST"], "--port", env["FLASK_RUN_PORT"]]
-                kwargs = dict(cwd=str(BACKEND), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                if os.name == "nt":
-                    CREATE_NEW_PROCESS_GROUP = 0x00000200
-                    CREATE_NO_WINDOW = 0x08000000
-                    kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-                else:
-                    kwargs["preexec_fn"] = os.setpgrp
+def kill(pid: int):
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(pid, 15)
+    except Exception:
+        pass
 
-                p = subprocess.Popen(cmd, **kwargs)
-                _write_pid("flask_pid", p.pid)
-                print(f"[start] Flask pid={p.pid} → http://{env['FLASK_RUN_HOST']}:{env['FLASK_RUN_PORT']}")
-                # print first few lines then continue
-                try:
-                    for _ in range(20):
-                        line = p.stdout.readline()
-                        if not line: break
-                        print("[flask]", line.rstrip())
-                except Exception:
-                    pass
-                return p.pid
+if __name__ == "__main__":
+    if PIDF.exists():
+        try:
+            pid = int(PIDF.read_text().strip())
+            print(f"[flask] stopping pid={pid} …")
+            kill(pid)
+        except Exception:
+            pass
+        PIDF.unlink(missing_ok=True)
+    else:
+        print("[flask] no pid file")
+""", encoding="utf-8")
 
-            def _start_vite() -> int | None:
-                existing = _read_pid("vite_pid")
-                if existing:
-                    print(f"[start] Vite already running (pid={existing})")
-                    return existing
-                npm_cmd = _find_npm()
-                if not npm_cmd:
-                    print("[start] npm not found; skipping Vite. Install Node.js LTS and re-run start_server.py")
-                    return None
-                if not _npm_install_if_needed(npm_cmd):
-                    print("[start] npm install failed; not starting Vite.")
-                    return None
-                cmd = [npm_cmd, "run", "dev"]
-                kwargs = dict(cwd=str(FRONTEND), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                if os.name == "nt":
-                    CREATE_NEW_PROCESS_GROUP = 0x00000200
-                    CREATE_NO_WINDOW = 0x08000000
-                    kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-                else:
-                    kwargs["preexec_fn"] = os.setpgrp
-                p = subprocess.Popen(cmd, **kwargs)
-                _write_pid("vite_pid", p.pid)
-                print(f"[start] Vite pid={p.pid} → http://127.0.0.1:5173")
-                try:
-                    for _ in range(30):
-                        line = p.stdout.readline()
-                        if not line: break
-                        print("[vite]", line.rstrip())
-                except Exception:
-                    pass
-                return p.pid
-
-            def _args():
-                import argparse
-                ap = argparse.ArgumentParser()
-                ap.add_argument("--flask-only", action="store_true")
-                ap.add_argument("--vite-only", action="store_true")
-                return ap.parse_args()
-
-            def main():
-                a = _args()
-                if not a.vite_only:
-                    _start_flask()
-                    _wait_health()  # best-effort
-                if not a.flask_only:
-                    _start_vite()
-                print("[start] Done.")
-                return 0
-
-            if __name__ == "__main__":
-                sys.exit(main())
-        """), encoding="utf-8")
-
-    if needs_update(stop_py):
-        stop_py.write_text(textwrap.dedent(r"""\
-            #!/usr/bin/env python3
-            # VELA_START_SERVER_V2
-            import os, sys, json, time, signal, subprocess
-            from pathlib import Path
-
-            ROOT = Path(__file__).resolve().parent
-            PIDF = ROOT / ".pids.json"
-
-            def _kill(pid: int):
-                try:
-                    if os.name == "nt":
-                        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        os.kill(int(pid), signal.SIGTERM)
-                except Exception:
-                    pass
-
-            if __name__ == "__main__":
-                P = {}
-                if PIDF.exists():
-                    try: P = json.loads(PIDF.read_text(encoding="utf-8"))
-                    except Exception: P = {}
-                for key in ["vite_pid", "flask_pid"]:
-                    pid = P.get(key)
-                    if pid:
-                        print(f"[stop] stopping {key} pid={pid} …")
-                        _kill(pid); time.sleep(0.5)
-                        P.pop(key, None)
-                PIDF.write_text(json.dumps(P), encoding="utf-8")
-                print("[stop] Done.")
-        """), encoding="utf-8")
+    for f in (start_flask, stop_flask):
+        try: os.chmod(f, 0o755)
+        except Exception: pass
 
 
 def start_flask_detached(backend: Path, venv_path: Path, env: dict, host="127.0.0.1", port=5000):
