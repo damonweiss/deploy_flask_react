@@ -165,8 +165,10 @@ def install_requirements(python_exe: str, requirements_path: Path, backend: Path
     uv = shutil.which("uv")
     if uv:
         print("[STEP2] Installing requirements with uv pip sync:", requirements_path)
-        rc = _stream_run([uv, "pip", "sync", "--python", python_exe, str(requirements_path)],
-                         cwd=backend, env=env, label="uv")
+        _stream_run([python_exe, "-m", "pip", "install",
+                     "--disable-pip-version-check",
+                     "click>=8.1,<9", "flask-cors>=4,<5"],
+                    cwd=backend, env=env, label="pip")
         return rc  # IMPORTANT: return directly; don't fall through
     else:
         print("[STEP2] Installing requirements with pip -r:", requirements_path)
