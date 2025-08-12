@@ -257,10 +257,48 @@ def npm_install(fe_dir: Path, npm_cmd: Optional[str]) -> None:
     if not npm_cmd:
         print("[VITE] Skipping npm install (npm not available).")
         return
-    # On Windows npm is a .cmd; calling without shell is fine if we pass full path.
-    res = subprocess.run([npm_cmd, "install"], cwd=str(fe_dir), text=True, shell=False)
-    if res.returncode != 0:
+
+    env = os.environ.copy()
+    # Make npm chatty enough and avoid silence while it downloads
+    env.setdefault("npm_config_loglevel", "info")
+    env.setdefault("npm_config_progress", "true")
+    env.setdefault("npm_config_fund", "false")
+    env.setdefault("npm_config_audit", "false")
+
+    # stream output
+    label = "npm"
+    print(f"[{label}] exec: {npm_cmd} install (cwd={fe_dir})", flush=True)
+
+    creationflags = 0
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        creationflags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+
+    p = subprocess.Popen(
+        [npm_cmd, "install"],
+        cwd=str(fe_dir),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        shell=False,
+        creationflags=creationflags
+    )
+    assert p.stdout is not None
+    try:
+        for line in iter(p.stdout.readline, ""):
+            # npm sometimes uses \r progress; printing each line still shows steady activity
+            print(f"[{label}] {line.rstrip()}", flush=True)
+    finally:
+        p.stdout.close()
+    rc = p.wait()
+    print(f"[{label}] exit code: {rc}", flush=True)
+    if rc != 0:
         raise SystemError("npm install failed")
+
 
 def write_combined_start_stop(root: Path) -> None:
     run_dir = root / ".vela-run"; run_dir.mkdir(exist_ok=True)
