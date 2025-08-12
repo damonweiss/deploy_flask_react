@@ -394,9 +394,7 @@ def main() -> int:
     reqs_path = (root / args.requirements).resolve() if not Path(args.requirements).is_absolute() else Path(args.requirements)
 
     try:
-        if not reqs_path.exists():
-            print("[STEP2] requirements.txt missing — writing defaults …")
-            write_requirements(reqs_path)
+        write_requirements(reqs_path)
 
         venv_path, python_exe = create_venv(venv_dir, env)
         ensure_pip(python_exe, env)
