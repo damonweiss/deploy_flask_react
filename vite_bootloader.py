@@ -503,6 +503,158 @@ def write_combined_start_stop(root: Path) -> None:
         encoding="utf-8",
     )
 
+def write_vite_scripts(root: Path) -> None:
+    run_dir = root / ".vela-run"
+    run_dir.mkdir(exist_ok=True)
+
+    start_vite = root / "start_vite.py"
+    stop_vite  = root / "stop_vite.py"
+
+    start_vite.write_text(r"""#!/usr/bin/env python3
+import os, shutil, subprocess, time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+FRONTEND = ROOT / "frontend"
+RUN = ROOT / ".vela-run"; RUN.mkdir(exist_ok=True)
+PIDF = RUN / "vite.pid"
+
+def pid_alive(pid: int) -> bool:
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
+            return str(pid) in out.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except Exception:
+        return False
+
+def read_pid():
+    try:
+        if PIDF.exists():
+            p = int(PIDF.read_text().strip())
+            if pid_alive(p): return p
+    except Exception:
+        pass
+    return None
+
+def write_pid(pid: int):
+    PIDF.write_text(str(pid), encoding="utf-8")
+
+def find_npm() -> str | None:
+    p = shutil.which("npm")
+    if p: return p
+    if os.name == "nt":
+        candidates = [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "npm.cmd",
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "nodejs" / "npm.cmd",
+            Path(os.environ.get("LocalAppData", r"C:\Users\%USERNAME%\AppData\Local")) / "Programs" / "node" / "npm.cmd",
+        ]
+        nvm_home = os.environ.get("NVM_HOME")
+        if nvm_home: candidates.append(Path(nvm_home) / "npm.cmd")
+        for c in candidates:
+            if c.exists(): return str(c)
+    else:
+        for c in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm", "/usr/bin/npm"):
+            if Path(c).exists(): return c
+    return None
+
+def npm_install_if_needed(npm_cmd: str) -> bool:
+    if not (FRONTEND / "package.json").exists():
+        print("[vite] no package.json — nothing to start.")
+        return False
+    if (FRONTEND / "node_modules").exists():
+        return True
+    env = os.environ.copy()
+    env.setdefault("npm_config_loglevel","info")
+    env.setdefault("npm_config_progress","true")
+    env.setdefault("npm_config_audit","false")
+    env.setdefault("npm_config_fund","false")
+    cmd = [npm_cmd, "ci"] if (FRONTEND / "package-lock.json").exists() else [npm_cmd, "install"]
+    print("[vite] installing deps …")
+    p = subprocess.Popen(cmd, cwd=str(FRONTEND), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    assert p.stdout
+    for line in p.stdout:
+        print("[npm]", line.rstrip())
+    rc = p.wait()
+    print("[npm] exit code:", rc)
+    return rc == 0
+
+def start(detached: bool = True):
+    existing = read_pid()
+    if existing:
+        print(f"[vite] already running pid={existing}")
+        return existing
+
+    npm = find_npm()
+    if not npm:
+        print("[vite] npm not found. Install Node.js LTS and re-run.")
+        return None
+
+    if not npm_install_if_needed(npm):
+        print("[vite] npm install failed.")
+        return None
+
+    cmd = [npm, "run", "dev"]
+    kwargs = dict(cwd=str(FRONTEND))
+    if detached:
+        if os.name == "nt":
+            DETACHED_PROCESS = 0x00000008
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_NO_WINDOW = 0x08000000
+            kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        else:
+            kwargs["preexec_fn"] = os.setpgrp
+        kwargs.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    p = subprocess.Popen(cmd, **kwargs)
+    write_pid(p.pid)
+    print(f"[vite] pid={p.pid} → http://127.0.0.1:5173")
+    return p.pid
+
+if __name__ == "__main__":
+    start(detached=True)
+""", encoding="utf-8")
+
+    stop_vite.write_text(r"""#!/usr/bin/env python3
+import os, subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+RUN  = ROOT / ".vela-run"
+PIDF = RUN / "vite.pid"
+
+def kill(pid: int):
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(pid, 15)
+    except Exception:
+        pass
+
+if __name__ == "__main__":
+    if PIDF.exists():
+        try:
+            pid = int(PIDF.read_text().strip())
+            print(f"[vite] stopping pid={pid} …")
+            kill(pid)
+        except Exception:
+            pass
+        PIDF.unlink(missing_ok=True)
+    else:
+        print("[vite] no pid file")
+""", encoding="utf-8")
+
+    for f in (start_vite, stop_vite):
+        try: os.chmod(f, 0o755)
+        except Exception: pass
+
+
 def start_now_detached(root: Path) -> None:
     """Launch start_server.py detached so the bootloader can finish."""
     start_py = root / "start_server.py"
@@ -537,6 +689,9 @@ def main() -> int:
     npm_cmd = ensure_npm(auto_install=args.auto_install_node, preferred_pm=args.pm)
     npm_install(fe, npm_cmd)
     write_combined_start_stop(root)
+
+    write_vite_scripts(root)
+    print("[VITE] Frontend ready. Use: python start_vite.py (and start_flask.py separately).")
 
     if args.start_now:
         start_now_detached(root)
