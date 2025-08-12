@@ -16,27 +16,163 @@ import logging
 from pathlib import Path
 from typing import Dict, Any
 
+# --- stdout safety ---
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
+# --- logging first (so class methods can log immediately) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("folder_bootloader.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+log = logging.getLogger("folder_bootloader")
+
+
+def safe_write(path: Path, content: str, make_executable: bool = False) -> bool:
+    """Write file only if it does not already exist. Returns True if created."""
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if make_executable and os.name != "nt":
+        try:
+            os.chmod(path, 0o755)
+        except Exception:
+            pass
+    return True
+
+
+def write_unified_scripts(project_root: Path) -> list[str]:
+    """Create start_server.py and stop_servers.py if missing."""
+    start_py = project_root / "start_server.py"
+    stop_py = project_root / "stop_servers.py"
+
+    START_CONTENT = r'''#!/usr/bin/env python3
+import os, sys, subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+BACKEND = ROOT / "backend"
+VENV = BACKEND / ".venv"
+PID_DIR = ROOT / ".pids"
+PID_DIR.mkdir(exist_ok=True)
+
+def venv_python() -> str:
+    return str(VENV / ("Scripts/python.exe" if os.name=="nt" else "bin/python"))
+
+def detect_target(py: str) -> str | None:
+    code = (
+        "import importlib; m=importlib.import_module('app.main'); "
+        "print('CREATE' if hasattr(m,'create_app') else ('APP' if hasattr(m,'app') else 'NONE'))"
+    )
+    try:
+        out = subprocess.check_output([py, "-c", code], cwd=str(BACKEND), text=True).strip()
+        if out == "CREATE": return "app.main:create_app"
+        if out == "APP":    return "app.main:app"
+        return None
+    except Exception:
+        return None
+
+def run_flask(py: str, target: str):
+    env = os.environ.copy()
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    cmd = [py, "-m", "flask", "--app", target, "run", "--debug", "--port", "5000"]
+    proc = subprocess.Popen(cmd, cwd=str(BACKEND), env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    (PID_DIR / "flask.pid").write_text(str(proc.pid), encoding="utf-8")
+    print(f"[start] Flask dev server starting pid={proc.pid} -> http://127.0.0.1:5000")
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(line)
+    finally:
+        try: proc.wait()
+        except Exception: pass
+
+def main():
+    py = venv_python()
+    if not Path(py).exists():
+        print("[start] venv python not found:", py)
+        print("        Run Step 2 to create backend/.venv")
+        sys.exit(1)
+    target = detect_target(py)
+    if not target:
+        print("[start] Could not find create_app() or app in backend/app/main.py")
+        sys.exit(1)
+    run_flask(py, target)
+
+if __name__ == "__main__":
+    main()
+'''
+
+    STOP_CONTENT = r'''#!/usr/bin/env python3
+import os, signal
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PID_DIR = ROOT / ".pids"
+
+def kill_pidfile(name: str):
+    p = PID_DIR / name
+    if not p.exists():
+        return False
+    try:
+        pid = int(p.read_text().strip())
+    except Exception:
+        p.unlink(missing_ok=True)
+        return False
+    try:
+        if os.name == "nt":
+            os.system(f"taskkill /PID {pid} /T /F >nul 2>&1")
+        else:
+            os.kill(pid, signal.SIGTERM)
+        print(f"[stop] killed {name} pid={pid}")
+    except Exception as e:
+        print(f"[stop] could not kill {name} pid={pid}: {e}")
+    finally:
+        p.unlink(missing_ok=True)
+    return True
+
+def main():
+    any_killed = False
+    any_killed |= kill_pidfile("flask.pid")
+    any_killed |= kill_pidfile("vite.pid")
+    if not any_killed:
+        print("[stop] no pid files found")
+    else:
+        print("[stop] done")
+
+if __name__ == "__main__":
+    main()
+'''
+
+    created = []
+    if safe_write(start_py, START_CONTENT, make_executable=True):
+        created.append("start_server.py")
+    if safe_write(stop_py, STOP_CONTENT, make_executable=True):
+        created.append("stop_servers.py")
+    return created
+
+
 class FolderBootloader:
     """Simple bootloader that just creates folder structure."""
-    
-    def __init__(self, config_path: str = None):
+
+    def __init__(self, config_path: str | None = None):
         self.config_path = config_path or "bootloader_config.json"
-        self.config = self._load_config()
-        
-        # Use VELA_CORE_DIR if available (VelaOS deployment), otherwise current directory
+
+        # Determine project root (VelaOS → ascend to deployment root; else CWD)
         vela_target = os.environ.get("VELA_CORE_DIR")
         if vela_target:
-            # VELA_CORE_DIR points to deep internal directory like:
-            # C:\...\vela_install_20250810_193432\data\.vela\cores\1.0.0-e34b2e4c
-            # We want the deployment root: C:\...\vela_install_20250810_193432
             core_path = Path(vela_target)
-            # Go up: cores -> .vela -> data -> deployment_root
+            # cores -> .vela -> data -> deployment_root
             deployment_root = core_path.parent.parent.parent.parent
             self.project_root = deployment_root
             print(f"[VelaOS] Core directory: {core_path}")
@@ -44,57 +180,46 @@ class FolderBootloader:
         else:
             self.project_root = Path.cwd()
             print(f"[Local] Using current directory: {self.project_root}")
-            
+
+        # Now safe to load config + log
+        self.config = self._load_config()
         self.app_name = self.config["application"]["name"]
-        
-        # Setup logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler('folder_bootloader.log'),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger(__name__)
-    
+        self.logger = log
+
     def _load_config(self) -> Dict[str, Any]:
         """Load bootloader configuration."""
         try:
-            with open(self.config_path, 'r') as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except FileNotFoundError:
-            self.logger.warning(f"Config file {self.config_path} not found, using defaults")
+            log.warning(f"Config file {self.config_path} not found, using defaults")
             return self._default_config()
         except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in config file: {e}")
+            log.error(f"Invalid JSON in config file: {e}")
             return self._default_config()
-    
+
     def _default_config(self) -> Dict[str, Any]:
         """Return default configuration."""
         return {
             "application": {
                 "name": "Flask-Vite-App",
                 "version": "1.0.0",
-                "description": "Flask + Vite application"
+                "description": "Flask + Vite application",
             },
             "structure": {
                 "backend_dir": "backend",
                 "frontend_dir": "frontend",
                 "tests_dir": "tests",
                 "docs_dir": "docs",
-                "scripts_dir": "scripts"
-            }
+                "scripts_dir": "scripts",
+            },
         }
-    
+
     def create_folder_structure(self):
         """Create the project folder structure."""
         self.logger.info("Creating project folder structure...")
-        
-        # Get folder names from config
         structure = self.config.get("structure", {})
-        
-        # Define the folder structure
+
         folders = [
             structure.get("backend_dir", "backend"),
             structure.get("frontend_dir", "frontend"),
@@ -114,10 +239,9 @@ class FolderBootloader:
             structure.get("docs_dir", "docs"),
             structure.get("scripts_dir", "scripts"),
             "config",
-            "logs"
+            "logs",
         ]
-        
-        # Create each folder
+
         created_folders = []
         for folder in folders:
             folder_path = self.project_root / folder
@@ -127,76 +251,139 @@ class FolderBootloader:
                 self.logger.info(f"Created: {folder}")
             else:
                 self.logger.info(f"Exists: {folder}")
-        
-        # Create basic files
+
         self._create_basic_files()
-        
-        self.logger.info(f"Folder structure creation completed!")
+
+        # Always provide unified start/stop scripts
+        created_scripts = write_unified_scripts(self.project_root)
+        for f in created_scripts:
+            self.logger.info(f"Created file: {f}")
+
+        self.logger.info("Folder structure creation completed!")
         self.logger.info(f"Created {len(created_folders)} new folders")
-        
         return created_folders
-    
+
     def _create_basic_files(self):
-        """Create basic placeholder files."""
+        """Create basic placeholder files (non-destructive: only if missing)."""
         files_to_create = [
             # Backend files
-            ("backend/app/__init__.py", "# Flask app initialization\n"),
-            ("backend/app/main.py", "# Main Flask application\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.route('/')\ndef hello():\n    return {'message': 'Hello from Flask!'}\n"),
+            (
+                "backend/app/__init__.py",
+                "# Flask app init package\n",
+            ),
+            (
+                "backend/app/main.py",
+                # App factory with /api/health and root
+                "from flask import Flask, jsonify\n\n"
+                "def create_app():\n"
+                "    app = Flask(__name__)\n\n"
+                "    @app.get('/api/health')\n"
+                "    def health():\n"
+                "        return jsonify({'status': 'ok'})\n\n"
+                "    @app.get('/')\n"
+                "    def hello():\n"
+                "        return jsonify({'message': 'Hello from Flask!'})\n\n"
+                "    return app\n\n"
+                "# Expose `app` for servers that import module:app\n"
+                "app = create_app()\n",
+            ),
             ("backend/app/routes/__init__.py", "# Routes module\n"),
             ("backend/app/models/__init__.py", "# Models module\n"),
             ("backend/app/utils/__init__.py", "# Utils module\n"),
-            
             # Frontend files
-            ("frontend/src/main.jsx", "// Main React entry point\nimport React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport App from './App.jsx'\n\nReactDOM.createRoot(document.getElementById('root')).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n)\n"),
-            ("frontend/src/App.jsx", "// Main App component\nimport React from 'react'\n\nfunction App() {\n  return (\n    <div>\n      <h1>Flask + Vite App</h1>\n      <p>Welcome to your new application!</p>\n    </div>\n  )\n}\n\nexport default App\n"),
-            ("frontend/public/index.html", "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Flask + Vite App</title>\n</head>\n<body>\n    <div id=\"root\"></div>\n    <script type=\"module\" src=\"/src/main.jsx\"></script>\n</body>\n</html>\n"),
-            
-            # Test files
+            (
+                "frontend/src/main.jsx",
+                "// Main React entry point\n"
+                "import React from 'react'\n"
+                "import ReactDOM from 'react-dom/client'\n"
+                "import App from './App.jsx'\n\n"
+                "ReactDOM.createRoot(document.getElementById('root')).render(\n"
+                "  <React.StrictMode>\n"
+                "    <App />\n"
+                "  </React.StrictMode>,\n"
+                ")\n",
+            ),
+            (
+                "frontend/src/App.jsx",
+                "// Main App component\n"
+                "import React from 'react'\n\n"
+                "function App() {\n"
+                "  return (\n"
+                "    <div>\n"
+                "      <h1>Flask + Vite App</h1>\n"
+                "      <p>Welcome to your new application!</p>\n"
+                "    </div>\n"
+                "  )\n"
+                "}\n\n"
+                "export default App\n",
+            ),
+            (
+                "frontend/public/index.html",
+                "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+                "  <meta charset=\"UTF-8\" />\n"
+                "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n"
+                "  <title>Flask + Vite App</title>\n"
+                "</head>\n<body>\n"
+                "  <div id=\"root\"></div>\n"
+                "  <script type=\"module\" src=\"/src/main.jsx\"></script>\n"
+                "</body>\n</html>\n",
+            ),
+            # Tests
             ("tests/backend/__init__.py", "# Backend tests\n"),
             ("tests/frontend/__init__.py", "# Frontend tests\n"),
-            ("tests/test_example.py", "# Example test file\ndef test_example():\n    assert True\n"),
-            
-            # Config files
-            ("config/.env.example", "# Environment variables example\nFLASK_ENV=development\nFLASK_PORT=5000\nVITE_PORT=5173\n"),
-            
-            # Documentation
-            ("docs/README.md", f"# {self.app_name} Documentation\n\nProject documentation goes here.\n"),
-            
-            # Scripts
-            ("scripts/dev.py", "#!/usr/bin/env python3\n# Development scripts\nprint('Development script placeholder')\n"),
-            
-            # Logs placeholder
-            ("logs/.gitkeep", "# Keep logs directory in git\n")
+            (
+                "tests/test_example.py",
+                "# Example test file\n"
+                "def test_example():\n"
+                "    assert True\n",
+            ),
+            # Config
+            (
+                "config/.env.example",
+                "# Environment variables example\n"
+                "FLASK_ENV=development\nFLASK_PORT=5000\nVITE_PORT=5173\n",
+            ),
+            # Docs & scripts & logs
+            ("docs/README.md", f"# {self.config['application']['name']} Documentation\n\n"),
+            ("scripts/dev.py", "#!/usr/bin/env python3\nprint('Development script placeholder')\n"),
+            ("logs/.gitkeep", "# Keep logs directory in git\n"),
         ]
-        
+
         created_files = []
-        for file_path, content in files_to_create:
-            full_path = self.project_root / file_path
-            if not full_path.exists():
-                full_path.write_text(content)
-                created_files.append(file_path)
-                self.logger.info(f"Created file: {file_path}")
-        
+        for rel, content in files_to_create:
+            full = self.project_root / rel
+            if safe_write(full, content, make_executable=rel.endswith(".py") and "scripts/" in rel):
+                created_files.append(rel)
+                self.logger.info(f"Created file: {rel}")
+
+        # Seed a requirements.txt if missing (helps Step 2 succeed)
+        reqs = self.project_root / "backend" / "requirements.txt"
+        default_reqs = (
+            "flask>=3.0,<4\n"
+            "werkzeug>=3.0,<4\n"
+            "jinja2>=3.1,<4\n"
+            "markupsafe>=2.1,<3\n"
+            "blinker>=1.7,<2\n"
+            "itsdangerous>=2.1,<3\n"
+        )
+        if safe_write(reqs, default_reqs):
+            self.logger.info("Created file: backend/requirements.txt")
+
         self.logger.info(f"Created {len(created_files)} basic files")
         return created_files
-    
+
     def deploy(self):
         """Deploy - just create folder structure."""
         self.logger.info("Starting folder structure deployment...")
-        
         try:
-            created_folders = self.create_folder_structure()
-            
+            self.create_folder_structure()
             self.logger.info("Folder structure deployment completed successfully!")
             self.logger.info("Project structure is ready for development")
-            
-            # Show structure
             self._show_structure()
-            
         except Exception as e:
             self.logger.error(f"[X] Deployment failed: {e}")
             raise
-    
+
     def _show_structure(self):
         self.logger.info("")
         self.logger.info("Project Structure Created:")
@@ -221,17 +408,14 @@ class FolderBootloader:
         self.logger.info("`-- logs/")
 
 
-
 def main():
-    """Main entry point."""
     parser = argparse.ArgumentParser(description="Simple Folder Structure Bootloader")
     parser.add_argument("--deploy", action="store_true", help="Create folder structure")
     parser.add_argument("--config", default="bootloader_config.json", help="Config file path")
-    
     args = parser.parse_args()
-    
+
     bootloader = FolderBootloader(config_path=args.config)
-    
+
     if args.deploy:
         bootloader.deploy()
     else:
